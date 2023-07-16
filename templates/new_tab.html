@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+  <div class="row">
+    <div class="col-md-12">
+      <div class="alert alert-info" role="alert">
+        <h4 class="alert-heading">Настройте датчики, задайте псевдонимы и установите границы диапазона</h4>
+        <p class="mb-0">Для получения оповещений и полной информации на новой вкладке.</p>
+      </div>
+    </div>
+  </div>
+
+  {% from "spoiler.html" import spoiler_content %}
+  {{ spoiler_content(tab_id, table_names, tab_settings, range_data) }}
+</div>
+{% endblock %}

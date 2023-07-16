@@ -1,0 +1,52 @@
+{% extends 'base.html' %}
+
+{% block content %}
+    <div class="container">
+        <h4>Доступные датчики</h4>
+        <table class="table table-striped" id="sensorTable">
+            <thead>
+                <tr>
+                    <th>Имя</th>
+                    <th>Псевдоним</th>
+                    <th>Группа (вкладка)</th>
+                    <th>Время</th>
+                    <th>Статус</th>
+                    <th>Значение</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for name, alias, tab_name, time, status, value in data['table_data'] %}
+                <tr>
+                    <td>{{ name }}</td>
+                    <td>{{ alias }}</td>
+                    <td>{{ tab_name }}</td>
+                    <td class="utc-time">{{ time | formatdatetime }}</td>
+                    <td class="{{ 'text-success' if status == 'Online' else 'text-danger' }}">{{ status }}</td>
+                    <td>{{ value | round(2) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+{% endblock %}  <!-- Закрытие блока content -->
+
+{% block scripts %}
+    <script>
+        'use strict';
+        $(document).ready(function() {
+            $('#sensorTable').DataTable({
+                paging:   false,  // отключить пагинацию
+                info:     true,  // отключить информацию о странице
+                searching:    false, // отключить поиск
+                lengthChange: false, // отключить выбор количества записей на странице
+                ordering: true,
+                autoWidth:    true,
+                language: window.localizationForDataTable
+            });
+
+            setTimeout(function(){
+                location.reload();
+            }, 60000);
+        });
+    </script>
+{% endblock %}  <!-- Закрытие блока scripts -->

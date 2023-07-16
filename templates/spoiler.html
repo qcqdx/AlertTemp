@@ -1,0 +1,139 @@
+{% macro spoiler_content(tab_id, table_names, tab_settings, range_data) %}
+<div class="mt-4">
+    <!-- Общий спойлер "Настройки" -->
+    <div class="d-flex justify-content-end">
+        <a class="btn btn-primary" data-bs-toggle="collapse" href="#settingsOverallCollapse" role="button" aria-expanded="false" aria-controls="settingsOverallCollapse">
+            Настройки
+        </a>
+    </div>
+    <div class="collapse" id="settingsOverallCollapse">
+        <!-- Зона "Настройки вкладки" -->
+        <div class="card mt-2">
+            <div class="card-header">
+                <a class="collapsed card-link" data-bs-toggle="collapse" href="#settingsCollapse">
+                    Настройки вкладки
+                </a>
+            </div>
+            <div id="settingsCollapse" class="collapse">
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-8">
+                            <form action="/rename_tab" method="post" class="d-flex align-items-center">
+                                <input type="hidden" name="tab_id" value="{{ tab_id }}">
+                                <label for="new_tab_name" class="mr-2">Новое имя:</label>
+                                <input type="text" id="new_tab_name" name="new_tab_name" class="form-control mr-2">
+                                <button type="submit" class="btn btn-primary">Переименовать</button>
+                            </form>
+                        </div>
+                        <div class="col-md-4 d-flex justify-content-end">
+                            <form action="/delete_tab" method="post" onsubmit="return confirm('Вы уверены, что хотите удалить эту вкладку?');">
+                                <input type="hidden" name="tab_id" value="{{ tab_id }}">
+                                <button type="submit" class="btn btn-danger">Удалить вкладку</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Зона "Настройки датчиков" -->
+        <div class="card mt-2">
+            <div class="card-header">
+                <a class="collapsed card-link" data-bs-toggle="collapse" href="#sensorsCollapse">
+                    Настройки датчиков
+                </a>
+            </div>
+            <div id="sensorsCollapse" class="collapse">
+                <div class="card-body">
+                    <!-- Выбор таблиц и ввод псевдонимов -->
+                    <form action="/save_tab_settings" method="post">
+                        <input type="hidden" name="tab_id" value="{{ tab_id }}">
+                        <div class="mb-3">
+                            <!-- Датчик 1 -->
+                            <div class="row g-3 mb-2">
+                                <div class="col-md-6">
+                                    <label for="table1" class="form-label">Датчик 1:</label>
+                                    <select name="table1" id="table1" class="form-select">
+                                        {% for table in table_names %}
+                                            <option value="{{ table }}" {% if tab_settings and tab_settings.table1 == table %}selected{% endif %}>{{ table }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                                <div class="col-md-6">
+                                    <label for="table1_alias" class="form-label">Псевдоним 1:</label>
+                                    <input type="text" id="table1_alias" name="table1_alias" value="{{ tab_settings.table1_alias if tab_settings else '' }}" class="form-control">
+                                </div>
+                            </div>
+                            <!-- Датчик 2 -->
+                            <div class="row g-3 mb-2">
+                                <div class="col-md-6">
+                                    <label for="table2" class="form-label">Датчик 2:</label>
+                                    <select name="table2" id="table2" class="form-select">
+                                        {% for table in table_names %}
+                                            <option value="{{ table }}" {% if tab_settings and tab_settings.table2 == table %}selected{% endif %}>{{ table }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                                <div class="col-md-6">
+                                    <label for="table2_alias" class="form-label">Псевдоним 2:</label>
+                                    <input type="text" id="table2_alias" name="table2_alias" value="{{ tab_settings.table2_alias if tab_settings else '' }}" class="form-control">
+                                </div>
+                            </div>
+                            <!-- Датчик 3 -->
+                            <div class="row g-3 mb-2">
+                                <div class="col-md-6">
+                                    <label for="table3" class="form-label">Датчик 3:</label>
+                                    <select name="table3" id="table3" class="form-select">
+                                        {% for table in table_names %}
+                                            <option value="{{ table }}" {% if tab_settings and tab_settings.table3 == table %}selected{% endif %}>{{ table }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                                <div class="col-md-6">
+                                    <label for="table3_alias" class="form-label">Псевдоним 3:</label>
+                                    <input type="text" id="table3_alias" name="table3_alias" value="{{ tab_settings.table3_alias if tab_settings else '' }}" class="form-control">
+                                </div>
+                            </div>
+                            <button type="submit" class="btn btn-primary">Сохранить</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- Зона "Настройки диапазона" -->
+        <div class="card mt-2 mb-4">
+            <div class="card-header">
+                <a class="collapsed card-link" data-bs-toggle="collapse" href="#rangeCollapse">
+                    Настройки диапазона
+                </a>
+            </div>
+            <div id="rangeCollapse" class="collapse show">
+                <div class="card-body">
+                    <!-- Форма Перегрев/Переохлаждение -->
+                    <form action="/save_ranges" method="post" class="mt-4 mb-4">
+                        <input type="hidden" name="tab_id" value="{{ tab_id }}">
+                        <div class="row g-3 align-items-center">
+                            <div class="col-auto">
+                                <label for="overheat" class="form-label">Перегрев:</label>
+                            </div>
+                            <div class="col-auto">
+                                <input type="number" id="overheat" name="overheat" step="0.01" value="{{ range_data.overheat if range_data else '' }}" class="form-control">
+                            </div>
+                            <div class="col-auto">
+                                <label for="overcool" class="form-label">Переохлаждение:</label>
+                            </div>
+                            <div class="col-auto">
+                                <input type="number" id="overcool" name="overcool" step="0.01" value="{{ range_data.overcool if range_data else '' }}" class="form-control">
+                            </div>
+                            <div class="col-auto">
+                                <button type="submit" class="btn btn-primary">Задать</button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endmacro %}

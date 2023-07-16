@@ -1,0 +1,33 @@
+        .footer {
+            position: fixed;
+            left: 0;
+            bottom: 0;
+            width: 100%;
+            text-align: center;
+        }
+        .nav-pills .nav-link {
+            border-right: 1px solid #ddd;
+            border-left: 1px solid #ddd;
+            margin-right: 10px;
+        }
+        .nav-pills .nav-link:hover {
+            background-color: #ddd;
+        }
+        .nav-pills .nav-link.active {
+            background-color: #bbb;
+        }
+        body {
+            padding-bottom: 50px; /* Adjust as needed */
+        }
+        .footer {
+            z-index: 4
+        }
+/*
+        .footer {
+            z-index: 1030; */
+/* or a higher value if necessary *//*
+
+            position: sticky;
+            bottom: 0;
+            width: 100%;
+        }*/

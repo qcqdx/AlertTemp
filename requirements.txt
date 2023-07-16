@@ -1,0 +1,9 @@
+Flask
+flask-bootstrap
+pytz
+python-dateutil
+pandas
+plotly
+aiogram
+paho-mqtt
+sqlalchemy

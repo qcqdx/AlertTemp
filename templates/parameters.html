@@ -1,0 +1,135 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h4 class="mb-3">Управление пользователями</h4>
+<button class="btn btn-primary" type="button" data-bs-toggle="collapse" data-bs-target="#addUserForm" aria-expanded="false" aria-controls="addUserForm">
+    Добавить нового пользователя
+</button>
+<div class="collapse mt-3" id="addUserForm">
+    <div class="card card-body">
+        <form action="/add_user" method="post">
+            <div class="row mb-3">
+                <label for="uname" class="col-sm-2 col-form-label">Имя пользователя</label>
+                <div class="col-sm-10">
+                    <input type="text" id="uname" name="uname" required class="form-control">
+                </div>
+            </div>
+            <div class="row mb-3">
+                <label for="userid" class="col-sm-2 col-form-label">ID пользователя в Telegram</label>
+                <div class="col-sm-10">
+                    <input type="text" id="userid" name="userid" required class="form-control">
+                </div>
+            </div>
+            <div class="row mb-3">
+                <label for="email" class="col-sm-2 col-form-label">Электронная почта</label>
+                <div class="col-sm-10">
+                    <input type="text" id="email" name="email" required class="form-control">
+                </div>
+            </div>
+            <input type="submit" value="Добавить пользователя" class="btn btn-primary">
+        </form>
+    </div>
+</div>
+<h4 class="mt-5">Существующие пользователи</h4>
+<table class="table">
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Имя пользователя</th>
+            <th>ID пользователя</th>
+            <th>Электронная почта</th>
+            <th>Действие</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for user in users %}
+            <tr>
+                <td>{{ user[0] }}</td>
+                <td>{{ user[1] }}</td>
+                <td>{{ user[2] }}</td>
+                <td>{{ user[3] }}</td>
+                <td>
+                    <form action="/delete_user" method="post" onsubmit="return confirm('Вы уверены, что хотите удалить этого пользователя?');">
+                        <input type="hidden" name="user_id" value="{{ user[0] }}">
+                        <input type="submit" value="Удалить" class="btn btn-danger">
+                    </form>
+                </td>
+            </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+
+{% with messages = get_flashed_messages() %}
+    {% if messages %}
+        <div class="alert alert-success">
+            {{ messages[0] }}
+        </div>
+    {% endif %}
+{% endwith %}
+
+<h4 class="mt-5">Управление ботами Telegram</h4>
+<button class="btn btn-primary" type="button" data-bs-toggle="collapse" data-bs-target="#addBotForm" aria-expanded="false" aria-controls="addBotForm">
+    Добавить нового бота
+</button>
+<div class="collapse mt-3" id="addBotForm">
+    <div class="card card-body">
+        <form action="/add_bot" method="post">
+            <div class="row mb-3">
+                <label for="bname" class="col-sm-2 col-form-label">Имя бота</label>
+                <div class="col-sm-10">
+                    <input type="text" id="bname" name="bname" required class="form-control">
+                </div>
+            </div>
+            <div class="row mb-3">
+                <label for="bkey" class="col-sm-2 col-form-label">API-ключ</label>
+                <div class="col-sm-10">
+                    <input type="text" id="bkey" name="bkey" required class="form-control">
+                </div>
+            </div>
+            <input type="submit" value="Добавить бота" class="btn btn-primary">
+        </form>
+    </div>
+</div>
+
+<h4 class="mt-5">Сохраненные боты</h4>
+<table class="table">
+    <thead>
+        <tr>
+            <th>Имя бота</th>
+            <th>API-ключ</th>
+            <th>Ссылка на бота</th>
+            <th>Действие</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for bot in bots %}
+            <tr>
+                <td>{{ bot[0] }}</td>
+                <td>{{ bot[1] }}</td>
+                <td><a href="https://t.me/{{ bot[0] }}_bot" target="_blank">t.me/{{ bot[0] }}_bot</a></td>
+                <td>
+                    <form action="/delete_bot" method="post" onsubmit="return confirm('Вы уверены, что хотите удалить этого бота?');">
+                        <input type="hidden" name="bot_name" value="{{ bot[0] }}">
+                        <input type="submit" value="Удалить" class="btn btn-danger">
+                    </form>
+                </td>
+            </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<script>
+    window.addEventListener('load', function() {
+        $('table').DataTable({
+            "language": window.localizationForDataTable,
+            "paging": false,
+            "info": true,
+            "searching": false,
+            "lengthChange": true,
+            "ordering": true,
+            "autoWidth": true,
+        });
+    });
+</script>
+{% endblock %}

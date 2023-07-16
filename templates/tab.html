@@ -1,0 +1,192 @@
+{% extends "base.html" %}
+
+{% block head %}
+    <title>{{ title }}</title>
+{% endblock %}
+
+{% block content %}
+<div class="row my-3">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, message in messages %}
+                <div class="alert alert-{{ category }}">
+                    {{ message }}
+                </div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+</div>
+
+<div class="row my-3">
+    {% from "spoiler.html" import spoiler_content %}
+    {{ spoiler_content(tab_id, table_names, tab_settings, range_data) }}
+</div>
+
+<div id="plot"></div>
+
+<div class="row">
+    <div class="col-lg-6 my-1 pr-lg-5 border-right">
+        <h3>Показания</h3>
+        <div class="table-responsive">
+            <table class="table datatable" id="sensorTable">
+                <thead>
+                    <tr>
+                        <th scope="col">Время</th>
+                        {% for alias in tab_settings[2:7:2] %}
+                            <th scope="col">{{ alias }}</th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in final_df %}
+                        <tr>
+                            <td class="utc-time">{{ row['Время'] }}</td>
+                            {% for alias in tab_settings[2:7:2] %}
+                                <td>{{ row[alias] }}</td>
+                            {% endfor %}
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="col-lg-5 offset-lg-1 my-1">
+        <h3>Инциденты</h3>
+        <div class="table-responsive">
+            <table class="table datatable" id="incidentTable">
+                <thead>
+                    <tr>
+                        <th scope="col">Время</th>
+                        <th scope="col">Событие</th>
+                        <th scope="col">Датчик</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for datetime, event, sensor, value in incidents %}
+                        <tr>
+                            <td class="utc-time">{{ datetime }}</td>
+                            <td>{{ event }}</td>
+                            <td>{{ sensor }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+    <style>
+        /* Уменьшаем размер текста и отступы в таблицах */
+        .datatable {
+            font-size: 0.8rem !important;
+        }
+        .datatable th, .datatable td {
+            padding: 0.3rem !important;
+        }
+
+        /* Уменьшаем размер элементов DataTable */
+        .dataTables_wrapper .dataTables_length,
+        .dataTables_wrapper .dataTables_filter,
+        .dataTables_wrapper .dataTables_info,
+        .dataTables_wrapper .dataTables_paginate {
+            font-size: 0.5rem !important;
+        }
+    </style>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+<script src="https://cdn.plot.ly/plotly-locale-ru-latest.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.1/moment.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/moment-timezone/0.5.33/moment-timezone-with-data.min.js"></script>
+
+<script>
+    var plotData = {{ plot_data | safe }};
+
+    plotData.forEach(function(trace) {
+        trace.x = trace.x.map(function(time) {
+            let utcTime = moment(time).tz('Europe/Moscow');
+            return utcTime.format('YYYY-MM-DD HH:mm:ss');
+        });
+    });
+
+    var layout = {
+        annotations: [
+            {
+                x: 1,
+                y: {{ overheat | safe }},
+                xref: 'paper',
+                yref: 'y',
+                text: 'Перегрев (' + {{ overheat | safe }} + ')',
+                showarrow: true,
+                font: {
+                    color: 'red',
+                    size: 14
+                }
+            },
+            {
+                x: 1,
+                y: {{ overcool | safe }},
+                xref: 'paper',
+                yref: 'y',
+                text: 'Переохлаждение (' + {{ overcool | safe }} + ')',
+                showarrow: true,
+                font: {
+                    color: 'blue',
+                    size: 14
+                }
+            }
+        ],
+        legend: {
+            orientation: 'h',
+            x: 0.5,
+            y: 1.15,
+            traceorder: 'normal',
+            xanchor: 'center',
+            font: {
+                family: 'sans-serif',
+                size: 14,
+                color: '#000'
+            },
+            bgcolor: '#E2E2E2',
+            bordercolor: '#FFFFFF',
+            borderwidth: 2
+        }
+    };
+    var config = {displayModeBar: true, displaylogo: false, locale: 'ru'};
+    Plotly.newPlot('plot', plotData, layout, config);
+</script>
+
+<script>
+    window.addEventListener('load', function() {
+        // Получаем данные из Python скрипта
+        let tableData = {{ final_df | safe }};
+
+        // Преобразуем строки даты и времени в объекты JavaScript Date
+        tableData.forEach(function(row) {
+            row['Время'] = new Date(row['Время']);
+        });
+
+        // Создаем массив названий столбцов
+        let columns = [{ "data": "Время", "title": "Время" }];
+        {% for alias in tab_settings[2:7:2] %}
+            columns.push({ "data": "{{ alias }}", "title": "{{ alias }}" });
+        {% endfor %}
+
+        // Инициализируем DataTable
+        $('#sensorTable').DataTable({
+            retrieve: true,
+            "data": tableData,
+            "columns": columns,
+            "paging":   false,
+            "info":     true,
+            "searching":    false,
+            "lengthChange": false,
+            "order": [[ 0, "desc" ]], // обратная сорировка в колонке "Время"
+            "autoWidth":    true,
+            "language": window.localizationForDataTable
+        });
+    });
+</script>
+{% endblock %}
