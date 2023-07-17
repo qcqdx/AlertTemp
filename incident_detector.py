@@ -95,14 +95,17 @@ def main():
                 else:
                     new_state = "Возврат в норму"
 
+                # Обновляем состояние в базе данных в любом случае
+                incidents_cur.execute(
+                    "INSERT OR REPLACE INTO states (sensor, state) VALUES (?, ?)",
+                    (sensor, new_state))
+
+                # Вставляем запись об инциденте только если состояние изменилось
                 if new_state != last_state:
                     incidents_cur.execute(
                         "INSERT INTO incidents (datetime, event, tab_id, sensor, value) "
                         "VALUES (?, ?, ?, ?, ?)",
                         (timestamp, new_state, tab_id, sensor, value))
-                    incidents_cur.execute(
-                        "INSERT OR REPLACE INTO states (sensor, state) VALUES (?, ?)",
-                        (sensor, new_state))
 
             incidents_conn.commit()
 

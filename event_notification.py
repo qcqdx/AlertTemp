@@ -23,6 +23,12 @@ chat_ids = cur_settings.fetchall()
 # Telegram bot setup
 bots = [Bot(api_key[0]) for api_key in bot_api_keys]
 
+# Create a new event loop
+loop = asyncio.new_event_loop()
+
+# Set the new event loop as the current event loop
+asyncio.set_event_loop(loop)
+
 
 # Function to convert tab_id to tab_name
 def convert_tab_id(tab_id):
@@ -64,31 +70,40 @@ async def send_incident(incident):
         for chat_id in chat_ids:
             await bot.send_message(chat_id[0], message_to_send, parse_mode='HTML')
 
-
 # Get the id of the latest incident
 cur_incidents.execute("SELECT * FROM incidents ORDER BY id DESC LIMIT 1")
 last_incident = cur_incidents.fetchone()
 
-# Send the latest incident to the Telegram chat
-asyncio.run(send_incident(last_incident))
+# Check if there are any incidents in the table
+if last_incident is not None:
+    # Send the latest incident to the Telegram chat
+    loop.run_until_complete(send_incident(last_incident))
 
-# Save the id of the latest incident
-last_id = last_incident[0]
+    # Save the id of the latest incident
+    last_id = last_incident[0]
+else:
+    # If there are no incidents in the table, set last_id to 0
+    last_id = 0
 
-# Monitor the database for new incidents
-while True:
-    # Get the latest incident
-    cur_incidents.execute("SELECT * FROM incidents WHERE id > ?", (last_id,))
-    new_incidents = cur_incidents.fetchall()
+try:
+    # Monitor the database for new incidents
+    while True:
+        # Get the latest incident
+        cur_incidents.execute("SELECT * FROM incidents WHERE id > ?", (last_id,))
+        new_incidents = cur_incidents.fetchall()
 
-    # If there are any new incidents
-    if new_incidents:
-        # Send each new incident to the Telegram chat
-        for incident in new_incidents:
-            asyncio.run(send_incident(incident))
+        # If there are any new incidents
+        if new_incidents:
+            # Send each new incident to the Telegram chat
+            for incident in new_incidents:
+                loop.run_until_complete(send_incident(incident))
 
-        # Update the last_id
-        last_id = new_incidents[-1][0]
+                # Update the last_id
+                last_id = incident[0]
 
-    # Wait for a while before checking again
-    time.sleep(10)
+        # Wait for a while before checking again
+        time.sleep(10)
+except KeyboardInterrupt:
+    # When the program is interrupted, close all bots
+    for bot in bots:
+        loop.run_until_complete(bot.close())
