@@ -177,7 +177,10 @@ class DataProcessor(threading.Thread):
         data = []
         last_flush_time = datetime.now(pytz.UTC)
         while self.running:
-            time.sleep(1)
+            try:
+                time.sleep(1)
+            except KeyboardInterrupt:
+                return
             if not self.running:
                 break
             try:
@@ -219,7 +222,10 @@ class DataCleaner(threading.Thread):
     def run(self):
         while self.running:
             for _ in range(24 * 60 * 60):
-                time.sleep(1)
+                try:
+                    time.sleep(1)
+                except KeyboardInterrupt:
+                    return
                 if not self.running:
                     return
             try:

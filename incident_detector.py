@@ -110,7 +110,10 @@ def main():
             incidents_conn.commit()
 
             # print("Следующая проверка через минуту.")
-            time.sleep(60)
+            try:
+                time.sleep(60)
+            except KeyboardInterrupt:
+                break
     except Exception as e:
         print(f"An error occurred: {e}")
     finally:

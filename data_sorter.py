@@ -181,4 +181,7 @@ while True:
     except Exception as e:
         logging.exception("Unexpected error occurred")
 
-    time.sleep(60)
+    try:
+        time.sleep(60)
+    except KeyboardInterrupt:
+        break
