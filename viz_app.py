@@ -616,4 +616,8 @@ def format_datetime(value):
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0')
+    env = os.getenv('FLASK_ENV', 'development')
+    if env == 'production':
+        app.run(host='0.0.0.0')
+    else:
+        app.run()
