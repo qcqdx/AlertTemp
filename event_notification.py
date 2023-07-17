@@ -13,11 +13,11 @@ conn_settings = sqlite3.connect('instance/user_settings.db')
 cur_settings = conn_settings.cursor()
 
 # Fetch the bot API key from the database
-cur_settings.execute("SELECT api_key FROM bots LIMIT 1")  # Assuming there's only one bot
+cur_settings.execute("SELECT api_key FROM bots LIMIT 3")  # Assuming there's only one bot
 bot_api_key = cur_settings.fetchone()[0]
 
 # Fetch the user chat_id from the database
-cur_settings.execute("SELECT userid FROM users LIMIT 1")  # Assuming there's only one user
+cur_settings.execute("SELECT userid FROM users LIMIT 10")  # Assuming there's only one user
 chat_id = cur_settings.fetchone()[0]
 
 # Telegram bot setup
