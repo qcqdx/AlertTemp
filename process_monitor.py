@@ -59,8 +59,8 @@ signal.signal(signal.SIGINT, signal_handler)
 database_path = 'instance/sensors_data.db'
 table_name = 'temp_records'
 
-commands = ["python data_collector.py", "python data_sorter.py", "python incident_detector.py",
-            "python viz_app.py", "python event_notification.py"]
+commands = ["python3 data_collector.py", "python3 data_sorter.py", "python3 incident_detector.py",
+            "python3 viz_app.py", "python3 event_notification.py"]
 
 # Создание каталога для файла журнала, если он еще не существует
 os.makedirs(os.path.dirname(log_file), exist_ok=True)
