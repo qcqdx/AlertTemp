@@ -12,16 +12,16 @@ cur_incidents = conn_incidents.cursor()
 conn_settings = sqlite3.connect('instance/user_settings.db')
 cur_settings = conn_settings.cursor()
 
-# Fetch the bot API key from the database
-cur_settings.execute("SELECT api_key FROM bots LIMIT 3")  # Assuming there's only one bot
-bot_api_key = cur_settings.fetchone()[0]
+# Fetch all bot API keys from the database
+cur_settings.execute("SELECT api_key FROM bots")
+bot_api_keys = cur_settings.fetchall()
 
-# Fetch the user chat_id from the database
-cur_settings.execute("SELECT userid FROM users LIMIT 10")  # Assuming there's only one user
-chat_id = cur_settings.fetchone()[0]
+# Fetch all user chat_ids from the database
+cur_settings.execute("SELECT userid FROM users")
+chat_ids = cur_settings.fetchall()
 
 # Telegram bot setup
-bot = Bot(bot_api_key)
+bots = [Bot(api_key[0]) for api_key in bot_api_keys]
 
 
 # Function to convert tab_id to tab_name
@@ -59,8 +59,10 @@ async def send_incident(incident):
     # Format the incident into a message
     message_to_send = format_message(incident)
 
-    # Send the incident to the Telegram chat
-    await bot.send_message(chat_id, message_to_send, parse_mode='HTML')
+    # Send the incident to all Telegram chats from all bots
+    for bot in bots:
+        for chat_id in chat_ids:
+            await bot.send_message(chat_id[0], message_to_send, parse_mode='HTML')
 
 
 # Get the id of the latest incident
