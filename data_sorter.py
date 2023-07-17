@@ -2,7 +2,7 @@ import os
 import logging
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlite3 import Connection as SQLite3Connection
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
@@ -36,46 +36,34 @@ destination_engine = create_engine(f'sqlite:///{destination_db_path}',
                                    echo=False)
 
 
-def update_and_sort_data():
-    source_db = source_engine.connect()
-    destination_db = destination_engine.connect()
-
+def update_and_sort_data(destination_db, source_db):
     with source_db.begin() as source_transaction:
         with destination_db.begin() as destination_transaction:
             check_and_create_last_update_table(destination_db)
             last_timestamp = get_last_update_time(destination_db)
 
             topics = source_db.execute(text("SELECT DISTINCT topic FROM temp_records")).fetchall()
+            logging.info(f"Topics: {topics}")
 
             for topic in topics:
-                topic_name = process_topic(destination_db, source_db, topic, last_timestamp)
+                topic_name, max_timestamp = process_topic(destination_db, source_db, topic, last_timestamp)
                 sort_topic_data(destination_db, topic_name)
                 remove_duplicates(destination_db, topic_name)
+                if max_timestamp is not None:
+                    update_last_update_time(destination_db, max_timestamp)
 
-            update_last_update_time(destination_db)
+    logging.info(f"Last timestamp: {last_timestamp}")
 
 
 def remove_duplicates(destination_db, topic_name):
     destination_db.execute(
-        text(f"""
-        CREATE TABLE IF NOT EXISTS temp_{topic_name} (timestamp TEXT, value REAL);
-        """)
-    )
+        text(f"CREATE TABLE IF NOT EXISTS temp_{topic_name} (timestamp TEXT, value REAL);"))
     destination_db.execute(
-        text(f"""
-        INSERT INTO temp_{topic_name} SELECT timestamp, value FROM (SELECT timestamp, value FROM {topic_name} GROUP BY timestamp);
-        """)
-    )
+        text(f"INSERT INTO temp_{topic_name} SELECT timestamp, value FROM (SELECT timestamp, value FROM {topic_name} GROUP BY timestamp);"))
     destination_db.execute(
-        text(f"""
-        DROP TABLE {topic_name};
-        """)
-    )
+        text(f"DROP TABLE {topic_name};"))
     destination_db.execute(
-        text(f"""
-        ALTER TABLE temp_{topic_name} RENAME TO {topic_name};
-        """)
-    )
+        text(f"ALTER TABLE temp_{topic_name} RENAME TO {topic_name};"))
 
 
 def check_and_create_last_update_table(destination_db):
@@ -91,6 +79,14 @@ def get_last_update_time(destination_db):
     result = result.fetchone()
     if result:
         last_timestamp = result[0]
+        # Convert to ISO 8601 format
+        last_timestamp = datetime.fromisoformat(last_timestamp).replace(tzinfo=timezone.utc)
+        # Check if last_timestamp is greater than current time
+        if last_timestamp > datetime.now(timezone.utc):
+            last_timestamp = datetime.now(timezone.utc)
+        # Subtract 1 minute
+        last_timestamp = last_timestamp - timedelta(minutes=1)
+        last_timestamp = last_timestamp.isoformat()
     return last_timestamp
 
 
@@ -100,88 +96,80 @@ def process_topic(destination_db, source_db, topic, last_timestamp):
         text(f"CREATE TABLE IF NOT EXISTS {topic_name} (timestamp TEXT, value REAL)"))
     data = get_data_from_source(source_db, topic, last_timestamp)
 
+    max_timestamp = None
     for row in data:
         timestamp, value = row
         destination_db.execute(
             text(f"INSERT INTO {topic_name} (timestamp, value) VALUES (:timestamp, :value)"),
             {"timestamp": timestamp, "value": value})
-    return topic_name
+        if max_timestamp is None or timestamp > max_timestamp:
+            max_timestamp = timestamp
+
+    logging.info(f"Data from source: {data}")
+
+    return topic_name, max_timestamp
 
 
 def get_data_from_source(source_db, topic, last_timestamp):
     if last_timestamp:
+        # Convert last_timestamp to datetime object, add 1 second, and convert back to string
+        last_timestamp = (datetime.fromisoformat(last_timestamp.replace('Z', '+00:00')) + timedelta(seconds=1)).isoformat()
+        logging.info(f"Last timestamp before query: {last_timestamp}")
         data = source_db.execute(
-            text(f"SELECT timestamp, value FROM temp_records WHERE topic=:topic AND timestamp>:last_timestamp"),
+            text(f"SELECT timestamp, value FROM temp_records WHERE topic=:topic AND timestamp>=:last_timestamp"),
             {"topic": topic[0], "last_timestamp": last_timestamp}).fetchall()
     else:
         data = source_db.execute(
             text(f"SELECT timestamp, value FROM temp_records WHERE topic=:topic"),
             {"topic": topic[0]}).fetchall()
+    logging.info(f"Data from query: {data}")
     return data
 
 
 def sort_topic_data(destination_db, topic_name):
     destination_db.execute(
-        text(f"CREATE TABLE IF NOT EXISTS temp_{topic_name} (timestamp TEXT, value REAL)"))
+        text(f"CREATE TABLE IF NOT EXISTS temp_{topic_name} (timestamp TEXT, value REAL);"))
     destination_db.execute(
-        text(f"INSERT INTO temp_{topic_name} SELECT * FROM {topic_name} ORDER BY timestamp ASC"))
-    destination_db.execute(text(f"DROP TABLE {topic_name}"))
+        text(f"INSERT INTO temp_{topic_name} SELECT * FROM {topic_name} ORDER BY timestamp ASC;"))
+    destination_db.execute(text(f"DROP TABLE {topic_name};"))
     destination_db.execute(
-        text(f"ALTER TABLE temp_{topic_name} RENAME TO {topic_name}"))
+        text(f"ALTER TABLE temp_{topic_name} RENAME TO {topic_name};"))
 
 
-def update_last_update_time(destination_db):
-    current_time = time.strftime('%Y-%m-%d %H:%M:%S')
-    destination_db.execute(text("UPDATE last_update SET timestamp=:current_time"),
-                           {"current_time": current_time})
+def update_last_update_time(destination_db, max_timestamp):
+    destination_db.execute(text("UPDATE last_update SET timestamp=:max_timestamp"),
+                           {"max_timestamp": max_timestamp})
 
 
 def delete_old_records(destination_db):
     tables = destination_db.execute(text("SELECT name FROM sqlite_master WHERE type='table';")).fetchall()
-    cutoff_date = datetime.now() - timedelta(days=180)
+    cutoff_date = datetime.utcnow() - timedelta(days=180)
     cutoff_date_str = cutoff_date.strftime('%Y-%m-%d %H:%M:%S')
 
     for table in tables:
         table_name = table[0]
         if table_name != 'last_update':  # skip the last_update table
             destination_db.execute(
-                text(f"DELETE FROM {table_name} WHERE timestamp < :cutoff_date_str"), {"cutoff_date_str": cutoff_date_str})
+                text(f"DELETE FROM {table_name} WHERE timestamp < :cutoff_date_str;"),
+                {"cutoff_date_str": cutoff_date_str})
 
 
-while True:
-    try:
-        # Move engine creation inside the loop
-        source_engine = create_engine(f'sqlite:///{source_db_path}',
-                                      connect_args={'check_same_thread': False},
-                                      echo=False)
-
-        destination_engine = create_engine(f'sqlite:///{destination_db_path}',
-                                           echo=False)
-
-        with lock:
-            logging.debug("Start updating and sorting data...")
-            try:
-                with destination_engine.connect() as conn:
-                    conn.execute(text("PRAGMA wal_checkpoint;"))
-                update_and_sort_data()
-            except Exception as e:
-                logging.exception("Error occurred during updating and sorting data")
-            else:
-                logging.debug("Finished updating and sorting data.")
-
-            logging.debug("Starting old records deletion...")
-            with destination_engine.connect().begin() as destination_transaction:
-                try:
-                    destination_transaction.connection.execute(text("PRAGMA wal_checkpoint;"))
-                    delete_old_records(destination_transaction.connection)
-                except Exception as e:
-                    logging.exception("Error occurred during old records deletion")
-                else:
-                    logging.debug("Finished old records deletion.")
-    except Exception as e:
-        logging.exception("Unexpected error occurred")
-
-    try:
+def main():
+    while True:
+        try:
+            with lock:
+                with source_engine.connect() as source_db:
+                    with destination_engine.connect() as destination_db:
+                        destination_db.connection.execute("PRAGMA wal_checkpoint;")
+                        update_and_sort_data(destination_db, source_db)
+                        logging.debug("Finished updating and sorting data.")
+                        destination_db.connection.execute("PRAGMA wal_checkpoint;")
+                        delete_old_records(destination_db)
+                        logging.debug("Finished old records deletion.")
+        except Exception as e:
+            logging.exception("Unexpected error occurred")
         time.sleep(60)
-    except KeyboardInterrupt:
-        break
+
+
+if __name__ == "__main__":
+    main()
