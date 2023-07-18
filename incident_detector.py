@@ -1,7 +1,7 @@
+import os
 import time
 import sqlite3
 from datetime import datetime, timedelta
-
 
 def create_incidents_db(cur):
     cur.execute("""
@@ -48,8 +48,20 @@ def delete_old_incidents(cur):
     cur.execute("DELETE FROM incidents WHERE datetime < ?", (six_months_ago.isoformat(),))
 
 
+def save_last_processed_timestamp(timestamp):
+    with open('last_processed_timestamp.txt', 'w') as f:
+        f.write(timestamp)
+
+
+def load_last_processed_timestamp():
+    if os.path.exists('last_processed_timestamp.txt'):
+        with open('last_processed_timestamp.txt', 'r') as f:
+            return f.read().strip()
+    return None
+
+
 def main():
-    last_processed_timestamp = None
+    last_processed_timestamp = load_last_processed_timestamp()
     incidents_conn = sqlite3.connect('instance/incidents.db')
     incidents_cur = incidents_conn.cursor()
     settings_conn = sqlite3.connect('instance/user_settings.db')
@@ -108,6 +120,9 @@ def main():
                         (timestamp, new_state, tab_id, sensor, value))
 
             incidents_conn.commit()
+
+            # Сохраняем последний обработанный timestamp
+            save_last_processed_timestamp(last_processed_timestamp)
 
             # print("Следующая проверка через минуту.")
             try:

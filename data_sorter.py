@@ -168,7 +168,10 @@ def main():
                         logging.debug("Finished old records deletion.")
         except Exception as e:
             logging.exception("Unexpected error occurred")
-        time.sleep(60)
+        try:
+            time.sleep(60)
+        except KeyboardInterrupt:
+            return
 
 
 if __name__ == "__main__":
