@@ -1,7 +1,7 @@
 import os
 import sqlite3
 
-for dirpath, dirnames, filenames in os.walk('.'):
+for dirpath, dirnames, filenames in os.walk('..'):
     for file in filenames:
         if file.endswith('.db'):
             db_file = os.path.join(dirpath, file)
