@@ -43,7 +43,7 @@ def update_and_sort_data(destination_db, source_db):
             last_timestamp = get_last_update_time(destination_db)
 
             topics = source_db.execute(text("SELECT DISTINCT topic FROM temp_records")).fetchall()
-            logging.info(f"Topics: {topics}")
+            logging.debug(f"Topics: {topics}")
 
             for topic in topics:
                 topic_name, max_timestamp = process_topic(destination_db, source_db, topic, last_timestamp)
@@ -52,7 +52,7 @@ def update_and_sort_data(destination_db, source_db):
                 if max_timestamp is not None:
                     update_last_update_time(destination_db, max_timestamp)
 
-    logging.info(f"Last timestamp: {last_timestamp}")
+    logging.debug(f"Last timestamp: {last_timestamp}")
 
 
 def remove_duplicates(destination_db, topic_name):
@@ -105,7 +105,7 @@ def process_topic(destination_db, source_db, topic, last_timestamp):
         if max_timestamp is None or timestamp > max_timestamp:
             max_timestamp = timestamp
 
-    logging.info(f"Data from source: {data}")
+    logging.debug(f"Data from source: {data}")
 
     return topic_name, max_timestamp
 
@@ -114,7 +114,7 @@ def get_data_from_source(source_db, topic, last_timestamp):
     if last_timestamp:
         # Convert last_timestamp to datetime object, add 1 second, and convert back to string
         last_timestamp = (datetime.fromisoformat(last_timestamp.replace('Z', '+00:00')) + timedelta(seconds=1)).isoformat()
-        logging.info(f"Last timestamp before query: {last_timestamp}")
+        logging.debug(f"Last timestamp before query: {last_timestamp}")
         data = source_db.execute(
             text(f"SELECT timestamp, value FROM temp_records WHERE topic=:topic AND timestamp>=:last_timestamp"),
             {"topic": topic[0], "last_timestamp": last_timestamp}).fetchall()
@@ -122,7 +122,7 @@ def get_data_from_source(source_db, topic, last_timestamp):
         data = source_db.execute(
             text(f"SELECT timestamp, value FROM temp_records WHERE topic=:topic"),
             {"topic": topic[0]}).fetchall()
-    logging.info(f"Data from query: {data}")
+    logging.debug(f"Data from query: {data}")
     return data
 
 

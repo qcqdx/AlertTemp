@@ -1,4 +1,3 @@
-import os
 import time
 import sqlite3
 from datetime import datetime, timedelta
@@ -21,6 +20,15 @@ def create_states_db(cur):
         CREATE TABLE IF NOT EXISTS states (
             sensor TEXT PRIMARY KEY,
             state TEXT NOT NULL
+        )
+    """)
+
+
+def create_last_processed_timestamp_db(cur):
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS last_processed_timestamp (
+            id INTEGER PRIMARY KEY,
+            timestamp TEXT NOT NULL
         )
     """)
 
@@ -48,20 +56,17 @@ def delete_old_incidents(cur):
     cur.execute("DELETE FROM incidents WHERE datetime < ?", (six_months_ago.isoformat(),))
 
 
-def save_last_processed_timestamp(timestamp):
-    with open('last_processed_timestamp.txt', 'w') as f:
-        f.write(timestamp)
+def save_last_processed_timestamp(cur, timestamp):
+    cur.execute("INSERT OR REPLACE INTO last_processed_timestamp (id, timestamp) VALUES (?, ?)", (1, timestamp))
 
 
-def load_last_processed_timestamp():
-    if os.path.exists('last_processed_timestamp.txt'):
-        with open('last_processed_timestamp.txt', 'r') as f:
-            return f.read().strip()
-    return None
+def load_last_processed_timestamp(cur):
+    cur.execute("SELECT timestamp FROM last_processed_timestamp WHERE id = ?", (1,))
+    res = cur.fetchone()
+    return res[0] if res else None
 
 
 def main():
-    last_processed_timestamp = load_last_processed_timestamp()
     incidents_conn = sqlite3.connect('instance/incidents.db')
     incidents_cur = incidents_conn.cursor()
     settings_conn = sqlite3.connect('instance/user_settings.db')
@@ -72,6 +77,9 @@ def main():
     try:
         create_incidents_db(incidents_cur)
         create_states_db(incidents_cur)  # Creating the states table
+        create_last_processed_timestamp_db(incidents_cur)  # Creating the last_processed_timestamp table
+
+        last_processed_timestamp = load_last_processed_timestamp(incidents_cur)
 
         # Main loop
         while True:
@@ -119,10 +127,10 @@ def main():
                         "VALUES (?, ?, ?, ?, ?)",
                         (timestamp, new_state, tab_id, sensor, value))
 
-            incidents_conn.commit()
-
             # Сохраняем последний обработанный timestamp
-            save_last_processed_timestamp(last_processed_timestamp)
+            save_last_processed_timestamp(incidents_cur, last_processed_timestamp)
+
+            incidents_conn.commit()
 
             # print("Следующая проверка через минуту.")
             try:
