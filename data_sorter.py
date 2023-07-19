@@ -57,9 +57,10 @@ def update_and_sort_data(destination_db, source_db):
 
 def remove_duplicates(destination_db, topic_name):
     destination_db.execute(
-        text(f"CREATE TABLE IF NOT EXISTS temp_{topic_name} (timestamp TEXT, value REAL);"))
+        text(f"CREATE TABLE IF NOT EXISTS temp_{topic_name} (id INTEGER PRIMARY KEY, timestamp TEXT, value REAL);"))
     destination_db.execute(
-        text(f"INSERT INTO temp_{topic_name} SELECT timestamp, value FROM (SELECT timestamp, value FROM {topic_name} GROUP BY timestamp);"))
+        text(f"INSERT INTO temp_{topic_name} (timestamp, value) SELECT timestamp, value "
+             f"FROM (SELECT timestamp, value FROM {topic_name} GROUP BY timestamp);"))
     destination_db.execute(
         text(f"DROP TABLE {topic_name};"))
     destination_db.execute(
@@ -77,14 +78,11 @@ def get_last_update_time(destination_db):
     last_timestamp = None
     result = destination_db.execute(text("SELECT max(timestamp) FROM last_update"))
     result = result.fetchone()
-    if result:
+    if result and isinstance(result[0], str):
         last_timestamp = result[0]
-        # Convert to ISO 8601 format
         last_timestamp = datetime.fromisoformat(last_timestamp).replace(tzinfo=timezone.utc)
-        # Check if last_timestamp is greater than current time
         if last_timestamp > datetime.now(timezone.utc):
             last_timestamp = datetime.now(timezone.utc)
-        # Subtract 1 minute
         last_timestamp = last_timestamp - timedelta(minutes=1)
         last_timestamp = last_timestamp.isoformat()
     return last_timestamp
@@ -93,7 +91,7 @@ def get_last_update_time(destination_db):
 def process_topic(destination_db, source_db, topic, last_timestamp):
     topic_name = topic[0].replace('/', '_')
     destination_db.execute(
-        text(f"CREATE TABLE IF NOT EXISTS {topic_name} (timestamp TEXT, value REAL)"))
+        text(f"CREATE TABLE IF NOT EXISTS {topic_name} (id INTEGER PRIMARY KEY, timestamp TEXT, value REAL)"))
     data = get_data_from_source(source_db, topic, last_timestamp)
 
     max_timestamp = None
@@ -112,7 +110,6 @@ def process_topic(destination_db, source_db, topic, last_timestamp):
 
 def get_data_from_source(source_db, topic, last_timestamp):
     if last_timestamp:
-        # Convert last_timestamp to datetime object, add 1 second, and convert back to string
         last_timestamp = (datetime.fromisoformat(last_timestamp.replace('Z', '+00:00')) + timedelta(seconds=1)).isoformat()
         logging.debug(f"Last timestamp before query: {last_timestamp}")
         data = source_db.execute(
@@ -128,7 +125,7 @@ def get_data_from_source(source_db, topic, last_timestamp):
 
 def sort_topic_data(destination_db, topic_name):
     destination_db.execute(
-        text(f"CREATE TABLE IF NOT EXISTS temp_{topic_name} (timestamp TEXT, value REAL);"))
+        text(f"CREATE TABLE IF NOT EXISTS temp_{topic_name} (id INTEGER PRIMARY KEY, timestamp TEXT, value REAL);"))
     destination_db.execute(
         text(f"INSERT INTO temp_{topic_name} SELECT * FROM {topic_name} ORDER BY timestamp ASC;"))
     destination_db.execute(text(f"DROP TABLE {topic_name};"))
@@ -148,7 +145,7 @@ def delete_old_records(destination_db):
 
     for table in tables:
         table_name = table[0]
-        if table_name != 'last_update':  # skip the last_update table
+        if table_name != 'last_update':
             destination_db.execute(
                 text(f"DELETE FROM {table_name} WHERE timestamp < :cutoff_date_str;"),
                 {"cutoff_date_str": cutoff_date_str})

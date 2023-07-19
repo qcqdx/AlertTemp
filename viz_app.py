@@ -51,6 +51,7 @@ def execute_with_retry(cursor, query, params=()):
 
 def check_status(time):
     current_time = datetime.now(pytz.UTC)
+    print(f"Time type: {type(time)}, Time value: {time}")
     time_difference = current_time - datetime.strptime(time, '%Y-%m-%dT%H:%M:%S.%f%z')
     return "Online" if time_difference.total_seconds() < 120 else "Offline"
 
@@ -88,8 +89,7 @@ def get_table_data():
             continue
         cur.execute(f"SELECT * FROM {table[0]} ORDER BY timestamp DESC LIMIT 1;")
         row = cur.fetchone()
-        time = row[0]
-        value = row[1]
+        _, time, value = row  # здесь происходит изменение
 
         try:
             user_cur.execute("SELECT tab_name, table1, table1_alias, table2, table2_alias, table3, table3_alias "
@@ -178,7 +178,7 @@ def index():
         'tabs': tabs,
     }
 
-    return render_template('index.html', data=data)
+    return render_template('index.html', data=data, tabs=get_all_tabs())
 
 
 @app.route('/tabs/<int:tab_id>', methods=['GET', 'POST'])
@@ -252,7 +252,10 @@ def tab(tab_id):
             cur2 = data_db.cursor()
             for table, alias in zip(data_tables, data_table_aliases):
                 cur2.execute(f"SELECT * FROM {table} ORDER BY timestamp DESC;")
-                temp_df = pd.DataFrame(cur2.fetchall(), columns=['Время', alias])
+                data = cur2.fetchall()
+                timestamps = [row[1] for row in data]
+                values = [row[2] for row in data]
+                temp_df = pd.DataFrame({'Время': timestamps, alias: values})
                 temp_df['Время'] = pd.to_datetime(temp_df['Время']).dt.round('1s')
                 temp_df.set_index('Время', inplace=True)
                 if final_df.empty:
@@ -320,7 +323,9 @@ def tab(tab_id):
             incidents = get_incidents(tab_id)
             # print(f"incidents: {incidents}")
 
-            return render_template('tab.html', tab_id=tab_id, table_names=table_names, data=data,
+            print(tabs)
+
+            return render_template('tab.html', tab_id=tab_id, table_names=table_names, tabs=get_all_tabs(), data=data,
                                    tab_settings=tab_settings, user_settings=user_settings, range_data=range_data,
                                    final_df=final_df.reset_index().to_dict(orient='records'),
                                    plot_data=json.dumps(plot_data), overheat=overheat, overcool=overcool,
@@ -483,7 +488,7 @@ def parameters():
     cur.execute("SELECT name, api_key FROM bots")
     bots = cur.fetchall()
 
-    return render_template('parameters.html', users=users, data=data, bots=bots)
+    return render_template('parameters.html', users=users, data=data, bots=bots, tabs=get_all_tabs())
 
 
 @app.route('/add_user', methods=['POST'])

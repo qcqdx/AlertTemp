@@ -20,7 +20,7 @@
         <div id="tabsContainer" style="display: flex; align-items: center;">
           <a class="navbar-brand" href="/">Общее<br/>состояние</a>
 
-        {% for tab in data.tabs %}
+        {% for tab in tabs %}
           <a class="navbar-brand {% if tab[0] == active_tab %}active{% endif %}" href="/tabs/{{ tab[0] }}">{{ tab[1] }}</a>
         {% endfor %}
 
