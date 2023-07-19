@@ -31,7 +31,7 @@
             <table class="table datatable" id="sensorTable">
                 <thead>
                     <tr>
-                        <th scope="col" style="display: none;">ID</th> <!-- Этот заголовок скрыт -->
+                         <th scope="col" style="display: none;">ID</th> <!-- Этот заголовок скрыт -->
                         <th scope="col">Время</th>
                         {% for alias in tab_settings[2:7:2] %}
                             <th scope="col">{{ alias }}</th>
@@ -41,7 +41,7 @@
                 <tbody>
                     {% for row in final_df %}
                         <tr>
-                            <td style="display: none;">{{ row['ID'] }}</td> <!-- Эта ячейка скрыта -->
+                             <td style="display: none;">{ row['ID'] }}</td> <!-- Эта ячейка скрыта -->
                             <td class="utc-time">{{ row['Время'] }}</td>
                             {% for alias in tab_settings[2:7:2] %}
                                 <td>{{ row[alias] }}</td>
@@ -162,40 +162,28 @@
 
 <script>
     window.addEventListener('load', function() {
-        // Получаем данные из Python скрипта
-        let tableData = {{ final_df | safe }};
-
-        // Преобразуем строки даты и времени в объекты JavaScript Date
-        tableData.forEach(function(row) {
-            row['Время'] = new Date(row['Время']);
+        // Инициализация таблицы сенсоров
+        $('#sensorTable').DataTable({
+            language: window.localizationForDataTable,
+            searching: true,
+            paging: true,
+            info: true,
+            lengthChange: true,
+            order: [[0, "desc"]],
+            autoWidth: true
         });
 
-        // Создаем массив названий столбцов
-        let columns = [{ "data": "Время", "title": "Время" }];
-        {% for alias in tab_settings[2:7:2] %}
-            columns.push({ "data": "{{ alias }}", "title": "{{ alias }}" });
-        {% endfor %}
-
-        // Инициализируем DataTable
-        $('#sensorTable').DataTable({
-            "columnDefs": [
-                {
-                    "targets": 1, // Указываем, что это касается второго столбца (ID)
-                    "visible": false, // Скрываем столбец
-                    "orderable": true, // Разрешаем сортировку по этому столбцу
-                }
-            ],
-            retrieve: true,
-            "data": tableData,
-            "columns": columns,
-            "paging": false,
-            "info": true,
-            "searching": false,
-            "lengthChange": false,
-            "order": [[1, "desc"]], // Указываем, что сортировка по умолчанию будет осуществляться по второму столбцу (ID) по возрастанию
-            "autoWidth": true,
-            "language": window.localizationForDataTable
+        // Инициализация таблицы инцидентов
+        $('#incidentTable').DataTable({
+            language: window.localizationForDataTable,
+            searching: true,
+            paging: true,
+            info: true,
+            lengthChange: true,
+            order: [[0, "desc"]],
+            autoWidth: true
         });
     });
 </script>
 {% endblock %}
+

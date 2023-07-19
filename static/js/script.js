@@ -92,8 +92,8 @@ window.localizationForDataTable = {
     }
 };
 
-window.addEventListener('load', function() {
+/*window.addEventListener('load', function() {
     $('.datatable').DataTable({
         language: window.localizationForDataTable
     });
-});
+});*/
