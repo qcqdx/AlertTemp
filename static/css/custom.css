@@ -22,6 +22,13 @@
         .footer {
             z-index: 4
         }
+        .overheat {
+        	color: red;
+        }
+        .overcool {
+        	color: blue;
+        }
+
 /*
         .footer {
             z-index: 1030; */

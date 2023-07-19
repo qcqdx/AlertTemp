@@ -258,7 +258,7 @@ def tab(tab_id):
                 values = [row[2] for row in data]
 
                 temp_df = pd.DataFrame({'Время': timestamps, alias: values})
-                temp_df['Время'] = pd.to_datetime(temp_df['Время']).dt.round('1s')
+                temp_df['Время'] = pd.to_datetime(temp_df['Время'], format='ISO8601').dt.round('1s')
 
                 if final_df.empty:
                     ids = [row[0] for row in data]  # добавляем столбец ID только один раз

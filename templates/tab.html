@@ -31,7 +31,7 @@
             <table class="table datatable" id="sensorTable">
                 <thead>
                     <tr>
-                         <th scope="col" style="display: none;">ID</th> <!-- Этот заголовок скрыт -->
+                         <th scope="col">ID</th> <!-- Этот заголовок скрыт -->
                         <th scope="col">Время</th>
                         {% for alias in tab_settings[2:7:2] %}
                             <th scope="col">{{ alias }}</th>
@@ -41,7 +41,7 @@
                 <tbody>
                     {% for row in final_df %}
                         <tr>
-                             <td style="display: none;">{ row['ID'] }}</td> <!-- Эта ячейка скрыта -->
+                             <td>{ row['ID'] }}</td> <!-- Эта ячейка скрыта -->
                             <td class="utc-time">{{ row['Время'] }}</td>
                             {% for alias in tab_settings[2:7:2] %}
                                 <td>{{ row[alias] }}</td>
@@ -161,29 +161,50 @@
 </script>
 
 <script>
-    window.addEventListener('load', function() {
-        // Инициализация таблицы сенсоров
-        $('#sensorTable').DataTable({
-            language: window.localizationForDataTable,
-            searching: true,
-            paging: true,
-            info: true,
-            lengthChange: true,
-            order: [[0, "desc"]],
-            autoWidth: true
-        });
+window.addEventListener('load', function() {
+    // Инициализация таблицы сенсоров
+    $('#sensorTable').DataTable({
+        language: window.localizationForDataTable,
+        searching: true,
+        paging: true,
+        info: true,
+        lengthChange: true,
+        order: [[1, "desc"]],
+        autoWidth: true,
+        columnDefs: [
+            { targets: 0, visible: false }  // Скрываем столбец ID
+        ],
+        createdRow: function(row, data) {
+            let overheatVal = parseFloat("{{ overheat }}");
+            let overcoolVal = parseFloat("{{ overcool }}");
 
-        // Инициализация таблицы инцидентов
-        $('#incidentTable').DataTable({
-            language: window.localizationForDataTable,
-            searching: true,
-            paging: true,
-            info: true,
-            lengthChange: true,
-            order: [[0, "desc"]],
-            autoWidth: true
-        });
+            for (let i = 2; i <= 4; i++) {  // Начнем с индекса 2
+                let valueStr = data[i];
+                let value = parseFloat(valueStr.replace(',', '.')); // Преобразование строки в число, учитывая возможные запятые
+
+                if (isNaN(value)) {
+                    continue;
+                }
+
+                if (value > overheatVal) {
+                    $('td', row).eq(i-1).css('color', 'red');
+                } else if (value < overcoolVal) {
+                    $('td', row).eq(i-1).css('color', 'blue');
+                }
+            }
+        }
     });
+
+    // Инициализация таблицы инцидентов
+    $('#incidentTable').DataTable({
+        language: window.localizationForDataTable,
+        searching: true,
+        paging: true,
+        info: true,
+        lengthChange: true,
+        order: [[0, "desc"]],
+        autoWidth: true
+    });
+});
 </script>
 {% endblock %}
-
