@@ -31,6 +31,7 @@
             <table class="table datatable" id="sensorTable">
                 <thead>
                     <tr>
+                        <th scope="col" style="display: none;">ID</th> <!-- Этот заголовок скрыт -->
                         <th scope="col">Время</th>
                         {% for alias in tab_settings[2:7:2] %}
                             <th scope="col">{{ alias }}</th>
@@ -40,6 +41,7 @@
                 <tbody>
                     {% for row in final_df %}
                         <tr>
+                            <td style="display: none;">{{ row['ID'] }}</td> <!-- Эта ячейка скрыта -->
                             <td class="utc-time">{{ row['Время'] }}</td>
                             {% for alias in tab_settings[2:7:2] %}
                                 <td>{{ row[alias] }}</td>
@@ -176,15 +178,22 @@
 
         // Инициализируем DataTable
         $('#sensorTable').DataTable({
+            "columnDefs": [
+                {
+                    "targets": 1, // Указываем, что это касается второго столбца (ID)
+                    "visible": false, // Скрываем столбец
+                    "orderable": true, // Разрешаем сортировку по этому столбцу
+                }
+            ],
             retrieve: true,
             "data": tableData,
             "columns": columns,
-            "paging":   false,
-            "info":     true,
-            "searching":    false,
+            "paging": false,
+            "info": true,
+            "searching": false,
             "lengthChange": false,
-            "order": [[ 0, "desc" ]], // обратная сорировка в колонке "Время"
-            "autoWidth":    true,
+            "order": [[1, "desc"]], // Указываем, что сортировка по умолчанию будет осуществляться по второму столбцу (ID) по возрастанию
+            "autoWidth": true,
             "language": window.localizationForDataTable
         });
     });

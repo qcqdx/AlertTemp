@@ -250,27 +250,32 @@ def tab(tab_id):
             data_table_aliases = tab_settings[2:7:2]
             data_db = get_db('instance/sorted_data.db')
             cur2 = data_db.cursor()
-            for table, alias in zip(data_tables, data_table_aliases):
+
+            for idx, (table, alias) in enumerate(zip(data_tables, data_table_aliases)):
                 cur2.execute(f"SELECT * FROM {table} ORDER BY timestamp DESC;")
                 data = cur2.fetchall()
                 timestamps = [row[1] for row in data]
                 values = [row[2] for row in data]
+
                 temp_df = pd.DataFrame({'Время': timestamps, alias: values})
                 temp_df['Время'] = pd.to_datetime(temp_df['Время']).dt.round('1s')
-                temp_df.set_index('Время', inplace=True)
+
                 if final_df.empty:
-                    final_df = temp_df
-                else:
-                    final_df = pd.concat([final_df, temp_df], axis=1)
+                    ids = [row[0] for row in data]  # добавляем столбец ID только один раз
+                    final_df = pd.DataFrame({'ID': ids, 'Время': timestamps})
+                    final_df['Время'] = pd.to_datetime(final_df['Время']).dt.round('1s')
+                final_df = final_df.iloc[::-1]
+                # Объединяем основной DataFrame с данными текущего датчика
+                final_df = pd.merge(final_df, temp_df, on='Время', how='outer')
+
             cur2.close()
 
-            final_df.sort_index(ascending=False, inplace=True)
-            final_df = final_df.groupby(final_df.index).first()
+            final_df.set_index('Время', inplace=True)
+            final_df.sort_values(by='ID', ascending=False, inplace=True)
+            # print(final_df)
 
             try:
                 final_df.index = final_df.index.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
-                # final_df.index = final_df.index.strftime('%Y-%m-%d %H:%M:%S')
-
             except AttributeError as e:
                 print(f"AttributeError: {e}. Probably the DataFrame is empty or its index is not a DatetimeIndex.")
 
@@ -323,7 +328,7 @@ def tab(tab_id):
             incidents = get_incidents(tab_id)
             # print(f"incidents: {incidents}")
 
-            print(tabs)
+            # print(tabs)
 
             return render_template('tab.html', tab_id=tab_id, table_names=table_names, tabs=get_all_tabs(), data=data,
                                    tab_settings=tab_settings, user_settings=user_settings, range_data=range_data,
@@ -450,26 +455,6 @@ def save_ranges():
 
     flash('Диапазоны сохранены.', 'success')
     return redirect(url_for('tab', tab_id=tab_id))
-
-
-@app.route('/tab_content/<int:tab_id>', methods=['GET'])
-def tab_content(tab_id):
-    tab_settings = get_tab_settings(tab_id)
-    table1, table1_alias = tab_settings[2:4]
-    table2, table2_alias = tab_settings[4:6]
-    table3, table3_alias = tab_settings[6:8]
-
-    data_with_aliases = []
-    for table, alias in [(table1, table1_alias), (table2, table2_alias), (table3, table3_alias)]:
-        if table:
-            cur = get_db(DATABASE1).cursor()
-            cur.execute(f"SELECT * FROM {table} ORDER BY timestamp DESC LIMIT 10;")
-            table_data = cur.fetchall()
-            data_with_aliases.append((table_data, alias))
-
-    if not data_with_aliases:
-        return "No data found for this tab. Please check the database."
-    return render_template('tab_content.html', data_with_aliases=data_with_aliases)
 
 
 @app.route('/parameters')
