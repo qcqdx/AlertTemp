@@ -29,81 +29,104 @@ loop = asyncio.new_event_loop()
 # Set the new event loop as the current event loop
 asyncio.set_event_loop(loop)
 
+previous_messages = {}  # словарь для хранения ID предыдущих сообщений
 
-# Function to convert tab_id to tab_name
+
+def get_previous_incident_type(current_id, tab_id, sensor_name):
+    while current_id > 0:
+        current_id -= 1
+        cur_incidents.execute("SELECT event, tab_id, sensor FROM incidents WHERE id=?", (current_id,))
+        row = cur_incidents.fetchone()
+
+        if not row:
+            continue
+
+        event, prev_tab_id, prev_sensor = row
+
+        # Проверяем соответствие tab_id и sensor_name
+        if prev_tab_id == tab_id and prev_sensor == sensor_name and event in ['Перегрев', 'Переохлаждение']:
+            return event
+
+    return None  # Если не найдено соответствующего инцидента
+
+
 def convert_tab_id(tab_id):
     cur_settings.execute("SELECT tab_name FROM tabs WHERE id = ?", (tab_id,))
     tab_name = cur_settings.fetchone()[0]
     return tab_name
 
 
-# Define function to format message
 def format_message(incident):
-    # Convert the tab_id to tab_name
     tab_name = convert_tab_id(incident[3])
+    prev_incident_type = get_previous_incident_type(incident[0], incident[3], incident[4]) if incident[
+                                                                                                  2] == 'Возврат в норму' else ""
 
-    # Get emoji for incident type
-    if incident[2] == 'Перегрев':
-        emoji = '🔥'
-    elif incident[2] == 'Переохлаждение':
-        emoji = '❄️'
-    else:  # if incident[2] == 'Норма'
-        emoji = '🍀'
+    emoji = {
+        'Перегрев': '🔥',
+        'Переохлаждение': '❄️',
+        'Возврат в норму': '🍀'
+    }.get(incident[2], '🚨')
 
-    # Format date and time
     datetime_str = incident[1]
     datetime_obj = datetime.fromisoformat(datetime_str.replace("Z", "+00:00")) + timedelta(hours=3)
     datetime_corrected_str = datetime_obj.strftime('%d.%m.%Y в %H:%M:%S')
 
-    # Format message with HTML tags for bold and italic and newlines for better readability
-    message = f"{emoji} <b>{tab_name}, {incident[4]},\n{incident[2]},</b> со значением: <b>{incident[5]} ℃.</b>\n<i>Зафиксировано:</i> \n<b>{datetime_corrected_str}</b>"
+    if incident[2] == 'Возврат в норму' and prev_incident_type:
+        hours, minutes, rest = incident[7].split(':')
+        seconds, milliseconds = map(int, rest.split('.'))
+        total_seconds = int(hours) * 3600 + int(minutes) * 60 + seconds
+
+        if milliseconds >= 500:
+            total_seconds += 1
+
+        downtime = str(timedelta(seconds=total_seconds))
+
+        message = (f"{emoji} <b>{tab_name}, {incident[4]},\n{incident[2]},</b> со значением: <b>{incident[5]} ℃.</b>"
+                   f"\n<i>Зафиксировано:</i> \n<b>{datetime_corrected_str}</b>\n"
+                   f"В состоянии {prev_incident_type} находился {downtime}")
+    else:
+        message = (f"{emoji} <b>{tab_name}, {incident[4]},\n{incident[2]},</b> со значением: <b>{incident[5]} ℃.</b>"
+                   f"\n<i>Зафиксировано:</i> \n<b>{datetime_corrected_str}</b>")
 
     return message
 
 
 async def send_incident(incident):
-    # Format the incident into a message
     message_to_send = format_message(incident)
+    key = (convert_tab_id(incident[3]), incident[4])
 
-    # Send the incident to all Telegram chats from all bots
     for bot in bots:
         for chat_id in chat_ids:
-            await bot.send_message(chat_id[0], message_to_send, parse_mode='HTML')
+            if incident[2] == 'Возврат в норму' and key in previous_messages:
+                await bot.send_message(chat_id[0], message_to_send, parse_mode='HTML', reply_to_message_id=previous_messages[key])
+                # Удаляем ключ, так как ответ на сообщение уже был дан
+                del previous_messages[key]
+            else:
+                sent_message = await bot.send_message(chat_id[0], message_to_send, parse_mode='HTML')
+                if incident[2] in ['Перегрев', 'Переохлаждение']:
+                    previous_messages[key] = sent_message.message_id
+
 
 # Get the id of the latest incident
 cur_incidents.execute("SELECT * FROM incidents ORDER BY id DESC LIMIT 1")
 last_incident = cur_incidents.fetchone()
 
-# Check if there are any incidents in the table
 if last_incident is not None:
-    # Send the latest incident to the Telegram chat
     loop.run_until_complete(send_incident(last_incident))
-
-    # Save the id of the latest incident
     last_id = last_incident[0]
 else:
-    # If there are no incidents in the table, set last_id to 0
     last_id = 0
 
 try:
-    # Monitor the database for new incidents
     while True:
-        # Get the latest incident
         cur_incidents.execute("SELECT * FROM incidents WHERE id > ?", (last_id,))
         new_incidents = cur_incidents.fetchall()
 
-        # If there are any new incidents
         if new_incidents:
-            # Send each new incident to the Telegram chat
             for incident in new_incidents:
                 loop.run_until_complete(send_incident(incident))
-
-                # Update the last_id
                 last_id = incident[0]
-
-        # Wait for a while before checking again
         time.sleep(10)
 except KeyboardInterrupt:
-    # When the program is interrupted, close all bots
     for bot in bots:
         loop.run_until_complete(bot.close())
