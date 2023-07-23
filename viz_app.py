@@ -9,7 +9,7 @@ import pandas as pd
 import json
 import plotly.graph_objs as go
 import plotly
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 
 app = Flask(__name__)
 bootstrap = Bootstrap(app)
@@ -51,7 +51,7 @@ def execute_with_retry(cursor, query, params=()):
 
 def check_status(time):
     current_time = datetime.now(pytz.UTC)
-    print(f"Time type: {type(time)}, Time value: {time}")
+    # print(f"Time type: {type(time)}, Time value: {time}")
     time_difference = current_time - datetime.strptime(time, '%Y-%m-%dT%H:%M:%S.%f%z')
     return "Online" if time_difference.total_seconds() < 120 else "Offline"
 
@@ -137,23 +137,26 @@ def create_plot(data):
     return graph_json
 
 
-def get_incidents(tab_id):
-    # print(f"Getting incidents for tab_id: {tab_id}")  # add this line
-
+def get_incidents(tab_id, start_time=None, end_time=None):
     # Create a direct connection to the database instead of using get_db
     db = sqlite3.connect('instance/incidents.db')
     cur = db.cursor()
+
     cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='incidents';")
     if cur.fetchone() is not None:
-        cur.execute("SELECT datetime, event, sensor, value FROM incidents WHERE tab_id=?", (tab_id,))
+        if start_time and end_time:
+            cur.execute(
+                "SELECT datetime, event, sensor, value FROM incidents WHERE tab_id=? AND datetime BETWEEN ? AND ?",
+                (tab_id, start_time, end_time))
+        else:
+            cur.execute("SELECT datetime, event, sensor, value FROM incidents WHERE tab_id=?", (tab_id,))
         incidents = cur.fetchall()
     else:
         incidents = []
 
-    # Add these lines to see all unique tab_id values in the incidents table
+    # To see all unique tab_id values in the incidents table
     cur.execute("SELECT DISTINCT tab_id FROM incidents")
     unique_tab_ids = cur.fetchall()
-    # print(f"Unique tab_id values in the incidents table: {unique_tab_ids}")
 
     return incidents
 
@@ -186,6 +189,9 @@ def tab(tab_id):
     user_db = get_user_db()
     cur = user_db.cursor()
 
+    start_time_str = request.args.get('start_time')
+    end_time_str = request.args.get('end_time')
+
     if request.method == 'POST':
         cur.execute("SELECT * FROM ranges WHERE tab_id = ?", (tab_id,))
         existing_range = cur.fetchone()
@@ -215,7 +221,6 @@ def tab(tab_id):
         try:
             cur.execute("SELECT * FROM tab_settings WHERE tab_id = ?", (tab_id,))
             tab_settings = cur.fetchone()
-            # print(f"tab_settings: {tab_settings}")
         except sqlite3.OperationalError as e:
             if 'no such table' in str(e):
                 tabs = get_all_tabs()
@@ -251,8 +256,22 @@ def tab(tab_id):
             data_db = get_db('instance/sorted_data.db')
             cur2 = data_db.cursor()
 
+            if not start_time_str and not end_time_str:
+                end_time = datetime.now()  # используйте datetime напрямую
+                start_time = end_time - timedelta(days=1)  # используйте timedelta напрямую
+                start_time_str = start_time.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+                end_time_str = end_time.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+
             for idx, (table, alias) in enumerate(zip(data_tables, data_table_aliases)):
-                cur2.execute(f"SELECT * FROM {table} ORDER BY timestamp DESC;")
+                # cur2.execute(f"SELECT * FROM {table} ORDER BY timestamp DESC;")
+                if start_time_str and end_time_str:
+                    # Преобразование строковых значений в дату/время (если это необходимо)
+                    start_time = start_time_str  # возможно, требуется дополнительное преобразование
+                    end_time = end_time_str  # аналогично
+
+                    cur2.execute(f"SELECT * FROM {table} WHERE timestamp BETWEEN ? AND ?", (start_time, end_time))
+                else:
+                    cur2.execute(f"SELECT * FROM {table} ORDER BY timestamp DESC;")
                 data = cur2.fetchall()
                 timestamps = [row[1] for row in data]
                 values = [row[2] for row in data]
@@ -272,63 +291,60 @@ def tab(tab_id):
 
             final_df.set_index('Время', inplace=True)
             final_df.sort_values(by='ID', ascending=False, inplace=True)
-            # print(final_df)
 
             try:
                 final_df.index = final_df.index.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
             except AttributeError as e:
                 print(f"AttributeError: {e}. Probably the DataFrame is empty or its index is not a DatetimeIndex.")
+            try:
+                plot_data = []
+                overheat = range_data[1]
+                overcool = range_data[2]
 
-            plot_data = []
-            overheat = range_data[1]
-            overcool = range_data[2]
+                color_list = ['#FDB813', '#808000', '#00FFFF']  # Золотистый, Оливковый, Циан
 
-            # color_list = ['#2E8B57', '#808000', '#B87333']  # Морская волна, Оливковый, Медь
-            # color_list = ['#800080', '#006400', '#8B4513']  # Пурпурный, Темно-зеленый, Коричневый
-            color_list = ['#FDB813', '#808000', '#00FFFF']  # Золотистый, Оливковый, Циан
-
-            for i, alias in enumerate(data_table_aliases):
-                curve = {
-                    'x': final_df.index.tolist(),
-                    'y': final_df[alias].tolist(),
-                    'type': 'scatter',  # тип графика
-                    'name': alias,  # название кривой
-                    'line': {'color': color_list[i]}  # индивидуальный цвет для каждой линии
-                }
-                plot_data.append(curve)
-
-                overheat_line = {
-                    'x': [final_df.index.min(), final_df.index.max()],
-                    'y': [overheat, overheat],
-                    'mode': 'lines',
-                    'name': 'Перегрев',
-                    'showlegend': False,  # Не отображать в легенде
-                    'line': {
-                        'color': 'red',
-                        'width': 1,
-                        'dash': 'dash'
+                for i, alias in enumerate(data_table_aliases):
+                    curve = {
+                        'x': final_df.index.tolist(),
+                        'y': final_df[alias].tolist(),
+                        'type': 'scatter',  # тип графика
+                        'name': alias,  # название кривой
+                        'line': {'color': color_list[i]}  # индивидуальный цвет для каждой линии
                     }
-                }
-                plot_data.append(overheat_line)
+                    plot_data.append(curve)
 
-                overcool_line = {
-                    'x': [final_df.index.min(), final_df.index.max()],
-                    'y': [overcool, overcool],
-                    'mode': 'lines',
-                    'name': 'Переохлаждение',
-                    'showlegend': False,  # Не отображать в легенде
-                    'line': {
-                        'color': 'blue',
-                        'width': 1,
-                        'dash': 'dash'
+                    overheat_line = {
+                        'x': [final_df.index.min(), final_df.index.max()],
+                        'y': [overheat, overheat],
+                        'mode': 'lines',
+                        'name': 'Перегрев',
+                        'showlegend': False,  # Не отображать в легенде
+                        'line': {
+                            'color': 'red',
+                            'width': 1,
+                            'dash': 'dash'
+                        }
                     }
-                }
-                plot_data.append(overcool_line)
+                    plot_data.append(overheat_line)
 
-            incidents = get_incidents(tab_id)
-            # print(f"incidents: {incidents}")
+                    overcool_line = {
+                        'x': [final_df.index.min(), final_df.index.max()],
+                        'y': [overcool, overcool],
+                        'mode': 'lines',
+                        'name': 'Переохлаждение',
+                        'showlegend': False,  # Не отображать в легенде
+                        'line': {
+                            'color': 'blue',
+                            'width': 1,
+                            'dash': 'dash'
+                        }
+                    }
+                    plot_data.append(overcool_line)
 
-            # print(tabs)
+                    incidents = get_incidents(tab_id, start_time=start_time_str, end_time=end_time_str)
+            except KeyError:
+                flash("В базе отсутствуют данные за указанный диапазон", "warning")
+                return redirect(url_for('tab', tab_id=tab_id))
 
             return render_template('tab.html', tab_id=tab_id, table_names=table_names, tabs=get_all_tabs(), data=data,
                                    tab_settings=tab_settings, user_settings=user_settings, range_data=range_data,
