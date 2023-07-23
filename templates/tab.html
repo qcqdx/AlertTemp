@@ -22,6 +22,24 @@
     {{ spoiler_content(tab_id, table_names, tab_settings, range_data) }}
 </div>
 
+<div class="row my-3">
+    <div class="col-12">
+        <!-- Quick selection buttons -->
+        <button class="btn btn-primary" id="one-day">1 день</button>
+        <button class="btn btn-primary" id="three-days">3 дня</button>
+
+        <!-- Date and time pickers for custom range -->
+        <label for="start-datetime">Диапазон с:</label>
+        <input type="datetime-local" id="start-datetime" name="start-datetime">
+
+        <label for="end-datetime">по:</label>
+        <input type="datetime-local" id="end-datetime" name="end-datetime">
+
+        <!-- Apply button for custom range -->
+        <button class="btn btn-primary" id="apply-range">Применить</button>
+    </div>
+</div>
+
 <div id="plot"></div>
 
 <div class="row">
@@ -95,6 +113,49 @@
             font-size: 0.5rem !important;
         }
     </style>
+
+<script>
+document.getElementById('one-day').addEventListener('click', function() {
+    console.log("One day button clicked");  // Добавьте эту строку для отладки
+    setRange(1);
+});
+
+document.getElementById('three-days').addEventListener('click', function() {
+    console.log("Three days button clicked");  // Добавьте эту строку для отладки
+    setRange(3);
+});
+
+document.getElementById('apply-range').addEventListener('click', function() {
+    const startTime = document.getElementById('start-datetime').value;
+    const endTime = document.getElementById('end-datetime').value;
+
+    console.log("Selected Start Time:", startTime);
+    console.log("Selected End Time:", endTime);
+
+    if (startTime && endTime) {
+        window.location.search = `start_time=${startTime}&end_time=${endTime}`;
+    } else {
+        console.warn("One of the datetime values is missing or invalid!");
+    }
+});
+
+
+function setRange(days) {
+    console.log("Setting range for:", days, "days");
+    const now = new Date();
+    const start = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+
+    // Adjust for timezone offset
+    now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+    start.setMinutes(start.getMinutes() - start.getTimezoneOffset());
+
+    const adjustedStart = start.toISOString().slice(0, 19);
+    const adjustedNow = now.toISOString().slice(0, 19);
+
+    window.location.search = `start_time=${adjustedStart}&end_time=${adjustedNow}`;
+}
+
+</script>
 {% endblock %}
 
 {% block scripts %}
