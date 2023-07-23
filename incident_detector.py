@@ -1,5 +1,8 @@
 import sqlite3
 from datetime import datetime
+import signal
+import sys
+import time
 
 
 def create_incidents_db(cursor):
@@ -122,6 +125,11 @@ def save_last_processed_timestamp(cursor, timestamp):
 
 
 def main():
+    def signal_handler(sig, frame):
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)
+
     incidents_conn = sqlite3.connect('instance/incidents.db')
     incidents_cur = incidents_conn.cursor()
     settings_conn = sqlite3.connect('instance/user_settings.db')
@@ -194,6 +202,8 @@ def main():
             save_last_processed_timestamp(incidents_cur, last_processed_timestamp)
             update_peak_values_for_return_to_normal(incidents_cur, sensors_cur)
             incidents_conn.commit()
+
+            time.sleep(1)  # задержка в 1 секунду
 
     except Exception as e:
         print(f"An error occurred: {e}")
