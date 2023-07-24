@@ -118,24 +118,22 @@ async def send_incident(incident):
 
     for bot in bots:
         for chat_id in chat_ids:
-            if incident[2] == 'Возврат в норму' and key in previous_messages:
-                # Достаем последний message_id из списка для данного ключа
-                reply_to_id = previous_messages[key].pop()
+            try:  # добавляем блок try
+                if incident[2] == 'Возврат в норму' and key in previous_messages:
+                    reply_to_id = previous_messages[key].pop()
+                    await bot.send_message(chat_id[0], message_to_send, parse_mode='HTML', reply_to_message_id=reply_to_id)
+                    if not previous_messages[key]:
+                        del previous_messages[key]
+                else:
+                    sent_message = await bot.send_message(chat_id[0], message_to_send, parse_mode='HTML')
+                    if incident[2] in ['Перегрев', 'Переохлаждение']:
+                        if key not in previous_messages:
+                            previous_messages[key] = []
+                        previous_messages[key].append(sent_message.message_id)
+            except Exception as e:  # обрабатываем исключение
+                print(f"Error sending message to chat_id {chat_id[0]} using bot {bot._token.split(':')[0]}: {e}")
 
-                # Отправляем сообщение как ответ на предыдущее
-                await bot.send_message(chat_id[0], message_to_send, parse_mode='HTML', reply_to_message_id=reply_to_id)
-
-                # Если после извлечения message_id список для данного ключа стал пустым, удаляем ключ
-                if not previous_messages[key]:
-                    del previous_messages[key]
-            else:
-                sent_message = await bot.send_message(chat_id[0], message_to_send, parse_mode='HTML')
-
-                # Сохраняем message_id только для определенных типов инцидентов
-                if incident[2] in ['Перегрев', 'Переохлаждение']:
-                    if key not in previous_messages:
-                        previous_messages[key] = []
-                    previous_messages[key].append(sent_message.message_id)
+                continue
     sent_incident_ids.add(incident_id)
 
 # Get the id of the latest incident
@@ -159,5 +157,10 @@ try:
                 last_id = incident[0]
         time.sleep(10)
 except KeyboardInterrupt:
+    pass
+finally:
     for bot in bots:
-        loop.run_until_complete(bot.close())
+        loop.run_until_complete(bot.session.close())
+
+for bot in bots:
+    loop.run_until_complete(bot.close())
