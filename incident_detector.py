@@ -121,7 +121,7 @@ def get_last_state(cursor, sensor):
 
 
 def save_last_processed_timestamp(cursor, timestamp):
-    cursor.execute("INSERT INTO last_processed (timestamp) VALUES (?)", (timestamp,))
+    cursor.execute("INSERT OR REPLACE INTO last_processed (timestamp) VALUES (?)", (timestamp,))
 
 
 def main():
