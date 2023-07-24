@@ -12,6 +12,29 @@ cur_incidents = conn_incidents.cursor()
 conn_settings = sqlite3.connect('instance/user_settings.db')
 cur_settings = conn_settings.cursor()
 
+# Проверка на наличие таблицы bots и её создание при отсутствии
+cur_settings.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='bots'")
+if not cur_settings.fetchone():
+    cur_settings.execute("""
+    CREATE TABLE bots (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        api_key TEXT NOT NULL
+    )
+    """)
+    conn_settings.commit()
+
+cur_settings.execute("DROP TABLE IF EXISTS bots")
+
+cur_settings.execute("""
+CREATE TABLE bots (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    api_key TEXT NOT NULL
+)
+""")
+conn_settings.commit()
+
 # Fetch all bot API keys from the database
 cur_settings.execute("SELECT api_key FROM bots")
 bot_api_keys = cur_settings.fetchall()
@@ -30,6 +53,8 @@ loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 
 previous_messages = {}  # словарь для хранения ID предыдущих сообщений
+
+sent_incident_ids = set()
 
 
 def get_previous_incident_type(current_id, tab_id, sensor_name):
@@ -93,6 +118,12 @@ def format_message(incident):
 
 
 async def send_incident(incident):
+    incident_id = incident[0]  # ID инцидента
+
+    # Проверяем, был ли этот инцидент уже отправлен
+    if incident_id in sent_incident_ids:
+        return
+
     message_to_send = format_message(incident)
     key = (convert_tab_id(incident[3]), incident[4])
 
@@ -116,7 +147,7 @@ async def send_incident(incident):
                     if key not in previous_messages:
                         previous_messages[key] = []
                     previous_messages[key].append(sent_message.message_id)
-
+    sent_incident_ids.add(incident_id)
 
 # Get the id of the latest incident
 cur_incidents.execute("SELECT * FROM incidents ORDER BY id DESC LIMIT 1")
