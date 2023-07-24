@@ -24,17 +24,6 @@ if not cur_settings.fetchone():
     """)
     conn_settings.commit()
 
-cur_settings.execute("DROP TABLE IF EXISTS bots")
-
-cur_settings.execute("""
-CREATE TABLE bots (
-    id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL,
-    api_key TEXT NOT NULL
-)
-""")
-conn_settings.commit()
-
 # Fetch all bot API keys from the database
 cur_settings.execute("SELECT api_key FROM bots")
 bot_api_keys = cur_settings.fetchall()
