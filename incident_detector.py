@@ -1,143 +1,219 @@
 import sqlite3
-import asyncio
-from datetime import datetime, timedelta
-from aiogram import Bot
+from datetime import datetime
+import signal
+import sys
 import time
 
-# Connect to the SQLite database
-conn_incidents = sqlite3.connect('instance/incidents.db')
-cur_incidents = conn_incidents.cursor()
 
-# Connect to the user_settings database
-conn_settings = sqlite3.connect('instance/user_settings.db')
-cur_settings = conn_settings.cursor()
-
-# Fetch all bot API keys from the database
-cur_settings.execute("SELECT api_key FROM bots")
-bot_api_keys = cur_settings.fetchall()
-
-# Fetch all user chat_ids from the database
-cur_settings.execute("SELECT userid FROM users")
-chat_ids = cur_settings.fetchall()
-
-# Telegram bot setup
-bots = [Bot(api_key[0]) for api_key in bot_api_keys]
-
-# Create a new event loop
-loop = asyncio.new_event_loop()
-
-# Set the new event loop as the current event loop
-asyncio.set_event_loop(loop)
-
-previous_messages = {}  # словарь для хранения ID предыдущих сообщений
+def create_incidents_db(cursor):
+    cursor.execute(
+        "CREATE TABLE IF NOT EXISTS incidents ("
+        "id INTEGER PRIMARY KEY,"
+        "datetime TEXT NOT NULL,"
+        "event TEXT NOT NULL,"
+        "tab_id INTEGER NOT NULL,"
+        "sensor TEXT NOT NULL,"
+        "value REAL NOT NULL,"
+        "peak REAL,"
+        "duration TEXT)"
+    )
 
 
-def get_previous_incident_type(current_id, tab_id, sensor_name):
-    while current_id > 0:
-        current_id -= 1
-        cur_incidents.execute("SELECT event, tab_id, sensor FROM incidents WHERE id=?", (current_id,))
-        row = cur_incidents.fetchone()
+def create_states_db(cursor):
+    cursor.execute(
+        "CREATE TABLE IF NOT EXISTS states ("
+        "sensor TEXT PRIMARY KEY,"
+        "state TEXT NOT NULL)"
+    )
 
-        if not row:
+
+def create_last_processed_timestamp_db(cursor):
+    cursor.execute(
+        "CREATE TABLE IF NOT EXISTS last_processed ("
+        "id INTEGER PRIMARY KEY,"
+        "timestamp TEXT NOT NULL)"
+    )
+
+
+def load_last_processed_timestamp(cursor):
+    cursor.execute("SELECT timestamp FROM last_processed ORDER BY id DESC LIMIT 1")
+    result = cursor.fetchone()
+    return result[0] if result else None
+
+
+def get_peak_and_start_time(sensor, start_time, end_time, cursor):
+    cursor.execute(
+        "SELECT MAX(value), MIN(timestamp) FROM temp_records WHERE topic = ? AND timestamp BETWEEN ? AND ?",
+        (sensor, start_time, end_time)
+    )
+    res = cursor.fetchone()
+    return res if res else (None, None)
+
+
+def update_peak_values_for_return_to_normal(cursor, sensors_cursor):
+    # print("Starting to update peak values...")
+    cursor.execute("SELECT id, datetime, sensor FROM incidents WHERE event = 'Возврат в норму' AND peak IS NULL")
+    records_to_update = cursor.fetchall()
+
+    for record in records_to_update:
+        record_id, end_time, sensor = record
+        cursor.execute("SELECT datetime FROM incidents WHERE sensor = ? AND event IN ('Перегрев', 'Переохлаждение') "
+                       "AND datetime < ? ORDER BY datetime DESC LIMIT 1", (sensor, end_time))
+        start_time_data = cursor.fetchone()
+
+        if not start_time_data:
+            # print(f"No start time found for record {record_id}.")
             continue
 
-        event, prev_tab_id, prev_sensor = row
+        start_time = start_time_data[0]
+        sensors_cursor.execute("SELECT MAX(value) FROM temp_records WHERE topic LIKE ? AND timestamp BETWEEN ? AND ?",
+                               ('%' + sensor + '%', start_time, end_time))
+        peak_value_data = sensors_cursor.fetchone()
 
-        # Проверяем соответствие tab_id и sensor_name
-        if prev_tab_id == tab_id and prev_sensor == sensor_name and event in ['Перегрев', 'Переохлаждение']:
-            return event
+        if not peak_value_data:
+            # print(f"No peak value data found for record {record_id} between {start_time} and {end_time}.")
+            continue
 
-    return None  # Если не найдено соответствующего инцидента
-
-
-def convert_tab_id(tab_id):
-    cur_settings.execute("SELECT tab_name FROM tabs WHERE id = ?", (tab_id,))
-    tab_name = cur_settings.fetchone()[0]
-    return tab_name
-
-
-def format_message(incident):
-    tab_name = convert_tab_id(incident[3])
-    prev_incident_type = get_previous_incident_type(incident[0], incident[3], incident[4]) if incident[
-                                                                                                  2] == 'Возврат в норму' else ""
-
-    emoji = {
-        'Перегрев': '🔥',
-        'Переохлаждение': '❄️',
-        'Возврат в норму': '🍀'
-    }.get(incident[2], '🚨')
-
-    datetime_str = incident[1]
-    datetime_obj = datetime.fromisoformat(datetime_str.replace("Z", "+00:00")) + timedelta(hours=3)
-    datetime_corrected_str = datetime_obj.strftime('%d.%m.%Y в %H:%M:%S')
-
-    if incident[2] == 'Возврат в норму' and prev_incident_type:
-        hours, minutes, rest = incident[7].split(':')
-        seconds, milliseconds = map(int, rest.split('.'))
-        total_seconds = int(hours) * 3600 + int(minutes) * 60 + seconds
-
-        if milliseconds >= 500:
-            total_seconds += 1
-
-        downtime = str(timedelta(seconds=total_seconds))
-
-        message = (f"<b>{tab_name}, {incident[4]},\n{emoji} {incident[2]},</b> со значением: <b>{incident[5]} ℃.</b>"
-                   f"\nВ состоянии <b>{prev_incident_type}</b> находился <b>{downtime}</b>"
-                   f"\n<i>Зафиксировано:</i> \n<b>{datetime_corrected_str}</b>\n")
-
-    else:
-        message = (f"<b>{tab_name}, {incident[4]},\n{emoji} {incident[2]},</b> со значением: <b>{incident[5]} ℃.</b>"
-                   f"\n<i>Зафиксировано:</i> \n<b>{datetime_corrected_str}</b>")
-
-    return message
+        peak_value = peak_value_data[0]
+        # print(f"Updating record {record_id} with peak value {peak_value}.")
+        cursor.execute("UPDATE incidents SET peak = ? WHERE id = ?", (peak_value, record_id))
 
 
-async def send_incident(incident):
-    message_to_send = format_message(incident)
-    key = (convert_tab_id(incident[3]), incident[4])
+def delete_old_incidents(cursor):
+    # This function can be expanded based on the logic to delete old incidents
+    pass
 
-    for bot in bots:
-        for chat_id in chat_ids:
-            if incident[2] == 'Возврат в норму' and key in previous_messages:
-                # Достаем последний message_id из списка для данного ключа
-                reply_to_id = previous_messages[key].pop()
 
-                # Отправляем сообщение как ответ на предыдущее
-                await bot.send_message(chat_id[0], message_to_send, parse_mode='HTML', reply_to_message_id=reply_to_id)
+def get_tab_and_range(cursor, sensor_name):
+    # Получение tab_id, overheat и overcool из таблиц ranges и tab_settings
+    cursor.execute("""
+        SELECT 
+            ranges.tab_id, ranges.overheat, ranges.overcool, 
+            CASE 
+                WHEN tab_settings.table1 = ? THEN tab_settings.table1_alias
+                WHEN tab_settings.table2 = ? THEN tab_settings.table2_alias
+                WHEN tab_settings.table3 = ? THEN tab_settings.table3_alias
+                ELSE NULL
+            END as sensor_alias
+        FROM ranges
+        JOIN tab_settings ON ranges.tab_id = tab_settings.tab_id
+        WHERE tab_settings.table1 = ? OR tab_settings.table2 = ? OR tab_settings.table3 = ?
+        """, (sensor_name, sensor_name, sensor_name, sensor_name, sensor_name, sensor_name))
 
-                # Если после извлечения message_id список для данного ключа стал пустым, удаляем ключ
-                if not previous_messages[key]:
-                    del previous_messages[key]
+    result = cursor.fetchone()
+    return result if result else (None, None, None, None)
+
+
+def get_peak_value(sensor, start_time, end_time, cursor):
+    """Функция для получения пикового значения датчика между start_time и end_time."""
+    cursor.execute(
+        "SELECT MAX(value) FROM temp_records WHERE topic = ? AND timestamp BETWEEN ? AND ?",
+        (sensor, start_time, end_time)
+    )
+    res = cursor.fetchone()
+    return res[0] if res else None
+
+
+def get_last_state(cursor, sensor):
+    cursor.execute("SELECT state FROM states WHERE sensor = ?", (sensor,))
+    result = cursor.fetchone()
+    return result[0] if result else None
+
+
+def save_last_processed_timestamp(cursor, timestamp):
+    cursor.execute("INSERT OR REPLACE INTO last_processed (timestamp) VALUES (?)", (timestamp,))
+
+
+def main():
+    def signal_handler(sig, frame):
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)
+
+    incidents_conn = sqlite3.connect('instance/incidents.db')
+    incidents_cur = incidents_conn.cursor()
+    settings_conn = sqlite3.connect('instance/user_settings.db')
+    settings_cur = settings_conn.cursor()
+    sensors_conn = sqlite3.connect('instance/sensors_data.db')
+    sensors_cur = sensors_conn.cursor()
+
+    try:
+        create_incidents_db(incidents_cur)
+        create_states_db(incidents_cur)
+        create_last_processed_timestamp_db(incidents_cur)
+        last_processed_timestamp = load_last_processed_timestamp(incidents_cur)
+
+        while True:
+            if last_processed_timestamp is None:
+                sensors_cur.execute("SELECT timestamp, topic, value FROM temp_records ORDER BY timestamp")
             else:
-                sent_message = await bot.send_message(chat_id[0], message_to_send, parse_mode='HTML')
+                sensors_cur.execute("SELECT timestamp, topic, value FROM temp_records "
+                                    "WHERE timestamp > ? ORDER BY timestamp", (last_processed_timestamp,))
 
-                # Сохраняем message_id только для определенных типов инцидентов
-                if incident[2] in ['Перегрев', 'Переохлаждение']:
-                    if key not in previous_messages:
-                        previous_messages[key] = []
-                    previous_messages[key].append(sent_message.message_id)
+            delete_old_incidents(incidents_cur)
+
+            for row in sensors_cur:
+                timestamp, sensor, value = row
+                last_processed_timestamp = timestamp
+                peak_value = None  # Инициализация перед использованием
+                duration = None  # Инициализация перед использованием
+                sensor_name = sensor.replace('/', '_')
+                tab_id, overheat, overcool, sensor_alias = get_tab_and_range(settings_cur, sensor_name)
+
+                if tab_id is None or overheat is None or overcool is None:
+                    continue
+
+                sensor = sensor_alias if sensor_alias else sensor_name
+                last_state = get_last_state(incidents_cur, sensor)
+
+                if value > overheat:
+                    new_state = "Перегрев"
+                elif value < overcool:
+                    new_state = "Переохлаждение"
+                else:
+                    if last_state in ["Перегрев", "Переохлаждение"]:
+                        # Получение timestamp начала инцидента
+                        incidents_cur.execute("SELECT datetime FROM incidents WHERE sensor = ? AND event = ? "
+                                              "ORDER BY datetime DESC LIMIT 1", (sensor, last_state))
+                        incident_start_timestamp = incidents_cur.fetchone()
+                        if incident_start_timestamp:
+                            incident_start_timestamp = incident_start_timestamp[0]
+                            peak_value = get_peak_value(sensor_name, incident_start_timestamp, timestamp, sensors_cur)
+                            duration = (
+                                    datetime.fromisoformat(timestamp) -
+                                    datetime.fromisoformat(incident_start_timestamp)
+                            )
+                            duration = str(duration)
+                        else:
+                            peak_value, duration = None, None
+                    else:
+                        peak_value, duration = None, None
+                    new_state = "Возврат в норму"
+
+                incidents_cur.execute("INSERT OR REPLACE INTO states (sensor, state) "
+                                      "VALUES (?, ?)", (sensor, new_state))
+
+                if new_state != last_state:
+                    incidents_cur.execute(
+                        "INSERT INTO incidents (datetime, event, tab_id, sensor, value, peak, duration) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (timestamp, new_state, tab_id, sensor, value, peak_value, duration))
+
+            save_last_processed_timestamp(incidents_cur, last_processed_timestamp)
+            update_peak_values_for_return_to_normal(incidents_cur, sensors_cur)
+            incidents_conn.commit()
+
+            time.sleep(1)  # задержка в 1 секунду
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        incidents_conn.rollback()
+
+    finally:
+        incidents_conn.close()
+        sensors_conn.close()
+        settings_conn.close()
 
 
-# Get the id of the latest incident
-cur_incidents.execute("SELECT * FROM incidents ORDER BY id DESC LIMIT 1")
-last_incident = cur_incidents.fetchone()
-
-if last_incident is not None:
-    loop.run_until_complete(send_incident(last_incident))
-    last_id = last_incident[0]
-else:
-    last_id = 0
-
-try:
-    while True:
-        cur_incidents.execute("SELECT * FROM incidents WHERE id > ?", (last_id,))
-        new_incidents = cur_incidents.fetchall()
-
-        if new_incidents:
-            for incident in new_incidents:
-                loop.run_until_complete(send_incident(incident))
-                last_id = incident[0]
-        time.sleep(10)
-except KeyboardInterrupt:
-    for bot in bots:
-        loop.run_until_complete(bot.close())
+if __name__ == '__main__':
+    main()

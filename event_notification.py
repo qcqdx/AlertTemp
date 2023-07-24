@@ -81,11 +81,12 @@ def format_message(incident):
 
         downtime = str(timedelta(seconds=total_seconds))
 
-        message = (f"{emoji} <b>{tab_name}, {incident[4]},\n{incident[2]},</b> со значением: <b>{incident[5]} ℃.</b>"
-                   f"\n<i>Зафиксировано:</i> \n<b>{datetime_corrected_str}</b>\n"
-                   f"В состоянии {prev_incident_type} находился {downtime}")
+        message = (f"<b>{tab_name}, {incident[4]},\n{emoji} {incident[2]},</b> со значением: <b>{incident[5]} ℃.</b>"
+                   f"\nВ состоянии <b>{prev_incident_type}</b> находился <b>{downtime}</b>"
+                   f"\n<i>Зафиксировано:</i> \n<b>{datetime_corrected_str}</b>\n")
+
     else:
-        message = (f"{emoji} <b>{tab_name}, {incident[4]},\n{incident[2]},</b> со значением: <b>{incident[5]} ℃.</b>"
+        message = (f"<b>{tab_name}, {incident[4]},\n{emoji} {incident[2]},</b> со значением: <b>{incident[5]} ℃.</b>"
                    f"\n<i>Зафиксировано:</i> \n<b>{datetime_corrected_str}</b>")
 
     return message
@@ -98,13 +99,23 @@ async def send_incident(incident):
     for bot in bots:
         for chat_id in chat_ids:
             if incident[2] == 'Возврат в норму' and key in previous_messages:
-                await bot.send_message(chat_id[0], message_to_send, parse_mode='HTML', reply_to_message_id=previous_messages[key])
-                # Удаляем ключ, так как ответ на сообщение уже был дан
-                del previous_messages[key]
+                # Достаем последний message_id из списка для данного ключа
+                reply_to_id = previous_messages[key].pop()
+
+                # Отправляем сообщение как ответ на предыдущее
+                await bot.send_message(chat_id[0], message_to_send, parse_mode='HTML', reply_to_message_id=reply_to_id)
+
+                # Если после извлечения message_id список для данного ключа стал пустым, удаляем ключ
+                if not previous_messages[key]:
+                    del previous_messages[key]
             else:
                 sent_message = await bot.send_message(chat_id[0], message_to_send, parse_mode='HTML')
+
+                # Сохраняем message_id только для определенных типов инцидентов
                 if incident[2] in ['Перегрев', 'Переохлаждение']:
-                    previous_messages[key] = sent_message.message_id
+                    if key not in previous_messages:
+                        previous_messages[key] = []
+                    previous_messages[key].append(sent_message.message_id)
 
 
 # Get the id of the latest incident
