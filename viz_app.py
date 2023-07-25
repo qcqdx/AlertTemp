@@ -305,7 +305,7 @@ def tab(tab_id):
 
             final_df = filter_data(final_df)
 
-            final_df = final_df.interpolate(method='linear')
+            # final_df = final_df.interpolate(method='linear')
 
             try:
                 final_df.index = final_df.index.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
