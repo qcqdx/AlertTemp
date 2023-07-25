@@ -186,6 +186,12 @@ def index():
     return render_template('index.html', data=data, tabs=get_all_tabs())
 
 
+def filter_data(df):
+    """Фильтрация аномальных значений из датафрейма."""
+    valid_indices = pd.to_datetime(df.index, errors='coerce').notna()
+    return df[valid_indices]
+
+
 @app.route('/tabs/<int:tab_id>', methods=['GET', 'POST'])
 def tab(tab_id):
     user_db = get_user_db()
@@ -293,6 +299,8 @@ def tab(tab_id):
 
             final_df.set_index('Время', inplace=True)
             final_df.sort_values(by='ID', ascending=False, inplace=True)
+
+            final_df = filter_data(final_df)
 
             try:
                 final_df.index = final_df.index.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
