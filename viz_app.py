@@ -128,9 +128,11 @@ def create_plot(data):
                     x=data['Время'],
                     y=data[column],
                     mode='lines',
-                    name=column  # псевдонимы датчиков используются в качестве имён трасс
+                    name=column,  # псевдонимы датчиков используются в качестве имён трасс
+                    connectgaps=False
                 )
             )
+
 
     graph_json = json.dumps(data_to_plot, cls=plotly.utils.PlotlyJSONEncoder)
 
