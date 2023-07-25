@@ -287,7 +287,7 @@ def tab(tab_id):
                 temp_df = pd.DataFrame({'Время': timestamps, alias: values})
                 temp_df['Время'] = pd.to_datetime(temp_df['Время'], format='ISO8601').dt.round('1s')
 
-                # Фильтруем аномальные значения для текущего temp_df
+                # Фильтруем аномальные значения для текущего temp_df на графике
                 temp_df = filter_data(temp_df)
 
                 if final_df.empty:
