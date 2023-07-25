@@ -86,9 +86,16 @@ def format_message(incident):
     datetime_corrected_str = datetime_obj.strftime('%d.%m.%Y в %H:%M:%S')
 
     if incident[2] == 'Возврат в норму' and prev_incident_type:
-        hours, minutes, rest = incident[7].split(':')
+        if 'day' in incident[7]:  # Если присутствует день
+            days_str, time_str = incident[7].split(' day, ')
+            days = int(days_str)
+            hours, minutes, rest = time_str.split(':')
+        else:
+            days = 0
+            hours, minutes, rest = incident[7].split(':')
+
         seconds, milliseconds = map(int, rest.split('.'))
-        total_seconds = int(hours) * 3600 + int(minutes) * 60 + seconds
+        total_seconds = days * 86400 + int(hours) * 3600 + int(minutes) * 60 + seconds
 
         if milliseconds >= 500:
             total_seconds += 1
