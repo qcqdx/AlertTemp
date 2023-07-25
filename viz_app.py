@@ -305,7 +305,7 @@ def tab(tab_id):
 
             final_df = filter_data(final_df)
 
-        	# final_df = final_df.interpolate(method='linear')
+            # final_df = final_df.interpolate(method='linear')
 
             def custom_interpolate(df):
                 for col in df.columns:
@@ -319,16 +319,23 @@ def tab(tab_id):
 
             final_df = custom_interpolate(final_df)
 
-            def interpolate_missing_values(df):
-                """Интерполяция пропущенных значений."""
-                # Интерполируем пропущенные значения
-                df = df.interpolate(method='linear', limit_direction='both')
-                # Заполняем оставшиеся пропущенные значения предыдущими известными значениями
-                df = df.fillna(method='ffill')
+            def handle_missing_values(df):
+                df.fillna(method='ffill', inplace=True)  # Forward fill
+                df.fillna(method='bfill', inplace=True)  # Backward fill for any remaining missing values
                 return df
 
-            # Применяем эту функцию к нашему DataFrame
-            final_df = interpolate_missing_values(final_df)
+            final_df = handle_missing_values(final_df)
+
+            # def interpolate_missing_values(df):
+            #     """Интерполяция пропущенных значений."""
+            #     # Интерполируем пропущенные значения
+            #     df = df.interpolate(method='linear', limit_direction='both')
+            #     # Заполняем оставшиеся пропущенные значения предыдущими известными значениями
+            #     df = df.fillna(method='ffill')
+            #     return df
+            #
+            # # Применяем эту функцию к нашему DataFrame
+            # final_df = interpolate_missing_values(final_df)
 
             try:
                 final_df.index = final_df.index.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
