@@ -319,6 +319,17 @@ def tab(tab_id):
 
             final_df = custom_interpolate(final_df)
 
+            def interpolate_missing_values(df):
+                """Интерполяция пропущенных значений."""
+                # Интерполируем пропущенные значения
+                df = df.interpolate(method='linear', limit_direction='both')
+                # Заполняем оставшиеся пропущенные значения предыдущими известными значениями
+                df = df.fillna(method='ffill')
+                return df
+
+            # Применяем эту функцию к нашему DataFrame
+            final_df = interpolate_missing_values(final_df)
+
             try:
                 final_df.index = final_df.index.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
             except AttributeError as e:
