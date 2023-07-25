@@ -287,6 +287,9 @@ def tab(tab_id):
                 temp_df = pd.DataFrame({'Время': timestamps, alias: values})
                 temp_df['Время'] = pd.to_datetime(temp_df['Время'], format='ISO8601').dt.round('1s')
 
+                # Фильтруем аномальные значения для текущего temp_df
+                temp_df = filter_data(temp_df)
+
                 if final_df.empty:
                     ids = [row[0] for row in data]  # добавляем столбец ID только один раз
                     final_df = pd.DataFrame({'ID': ids, 'Время': timestamps})
