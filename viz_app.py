@@ -307,6 +307,18 @@ def tab(tab_id):
 
             final_df = final_df.interpolate(method='linear')
 
+            def custom_interpolate(df):
+                for col in df.columns:
+                    nan_indices = df[col].index[df[col].isna()]
+                    for idx in nan_indices:
+                        prev_idx = df[col].loc[:idx].last_valid_index()
+                        next_idx = df[col].loc[idx:].first_valid_index()
+                        if pd.notna(prev_idx) and pd.notna(next_idx):
+                            df.at[idx, col] = (df.at[prev_idx, col] + df.at[next_idx, col]) / 2
+                return df
+
+            final_df = custom_interpolate(final_df)
+
             try:
                 final_df.index = final_df.index.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
             except AttributeError as e:
