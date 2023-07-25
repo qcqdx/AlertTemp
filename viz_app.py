@@ -305,7 +305,7 @@ def tab(tab_id):
 
             final_df = filter_data(final_df)
 
-            final_df = final_df.interpolate(method='linear')
+        	# final_df = final_df.interpolate(method='linear')
 
             def custom_interpolate(df):
                 for col in df.columns:
