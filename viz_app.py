@@ -285,7 +285,8 @@ def tab(tab_id):
                 values = [row[2] for row in data]
 
                 temp_df = pd.DataFrame({'Время': timestamps, alias: values})
-                temp_df['Время'] = pd.to_datetime(temp_df['Время'], format='ISO8601').dt.round('1s')
+                temp_df['Время'] = pd.to_datetime(temp_df['Время'], format='ISO8601').dt.round('1T')
+                temp_df = temp_df.groupby('Время').mean().reset_index()
 
                 # Фильтруем аномальные значения для текущего temp_df на графике
                 temp_df = filter_data(temp_df)
@@ -299,6 +300,15 @@ def tab(tab_id):
                 final_df = pd.merge(final_df, temp_df, on='Время', how='outer')
 
             cur2.close()
+
+            # Округлить временные метки до ближайшей минуты
+            final_df['Время'] = final_df['Время'].dt.round('T')
+
+            # Группировать данные по округленной временной метке и вычислить среднее значение для каждой группы
+            final_df = final_df.groupby('Время').mean().reset_index()
+
+            # Удалить все строки с пропущенными значениями
+            final_df = final_df.dropna()
 
             final_df.set_index('Время', inplace=True)
             final_df.sort_values(by='ID', ascending=False, inplace=True)
