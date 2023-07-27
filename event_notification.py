@@ -140,38 +140,33 @@ async def send_incident(incident):
         for chat_id in chat_ids:
 
             try:
-
                 if incident[2] == 'Возврат в норму' and key in previous_messages:
-
                     reply_to_id = previous_messages[key].pop()
-
                     await bot.send_message(chat_id[0], message_to_send, parse_mode='HTML',
                                            reply_to_message_id=reply_to_id)
-
                     logging.info(
                         f"Sent 'Возврат в норму' message to chat_id {chat_id[0]} using bot {bot._token.split(':')[0]} with reply_to_id {reply_to_id}. Message: {message_to_send}")
-
                     if not previous_messages[key]:
                         del previous_messages[key]
-
                 else:
-
                     sent_message = await bot.send_message(chat_id[0], message_to_send, parse_mode='HTML')
-
                     logging.info(
                         f"Sent '{incident[2]}' message to chat_id {chat_id[0]} using bot {bot._token.split(':')[0]}. Message: {message_to_send}")
-
                     if incident[2] in ['Перегрев', 'Переохлаждение']:
-
                         if key not in previous_messages:
                             previous_messages[key] = []
-
                         previous_messages[key].append(sent_message.message_id)
-
             except Exception as e:
-
                 logging.error(
                     f"Error sending message to chat_id {chat_id[0]} using bot {bot._token.split(':')[0]}: {e}")
+                if "Replied message not found" in str(e):
+                    logging.warning(f"Retrying to send message without reply_to_message_id due to error: {e}")
+                    try:
+                        await bot.send_message(chat_id[0], message_to_send, parse_mode='HTML')
+                        logging.info(
+                            f"Successfully resent message to chat_id {chat_id[0]} without reply_to_message_id.")
+                    except Exception as e2:
+                        logging.error(f"Failed to resend message to chat_id {chat_id[0]}: {e2}")
 
     sent_incident_ids.add(incident_id)
 
