@@ -181,6 +181,8 @@ function setRange(days) {
                 y: {{ overheat | safe }},
                 xref: 'paper',
                 yref: 'y',
+                ax: -20,
+                ay: 20,
                 text: 'Перегрев (' + {{ overheat | safe }} + ')',
                 showarrow: true,
                 font: {
@@ -206,7 +208,8 @@ function setRange(days) {
                 y: {{ critical_overheat | safe }},
                 xref: 'paper',
                 yref: 'y',
-                text: 'Критический перегрев (' + {{ critical_overheat | safe }} + ')',
+                ax: -20,
+                text: 'Критический<br>перегрев (' + {{ critical_overheat | safe }} + ')',
                 showarrow: true,
                 font: {
                     color: 'darkred',
@@ -218,7 +221,9 @@ function setRange(days) {
                 y: {{ critical_overcool | safe }},
                 xref: 'paper',
                 yref: 'y',
-                text: 'Критическое переохлаждение (' + {{ critical_overcool | safe }} + ')',
+                ax: -20,
+                ay: 40,
+                text: 'Критическое<br>переохлаждение (' + {{ critical_overcool | safe }} + ')',
                 showarrow: true,
                 font: {
                     color: 'darkblue',
