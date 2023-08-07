@@ -33,7 +33,7 @@ def get_user_db():
         db = g._user_database = sqlite3.connect(DATABASE2)
         db.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, uname TEXT, userid TEXT, email TEXT)")
         db.execute("CREATE TABLE IF NOT EXISTS tabs (id INTEGER PRIMARY KEY, tab_name TEXT)")
-        db.execute("CREATE TABLE IF NOT EXISTS ranges (tab_id INTEGER, overheat INTEGER, overcool INTEGER)")  # New line
+        db.execute("CREATE TABLE IF NOT EXISTS ranges (tab_id INTEGER, overheat INTEGER, overcool INTEGER, critical_overheat INTEGER, critical_overcool INTEGER)")
     return db
 
 
@@ -133,7 +133,6 @@ def create_plot(data):
                 )
             )
 
-
     graph_json = json.dumps(data_to_plot, cls=plotly.utils.PlotlyJSONEncoder)
 
     return graph_json
@@ -206,18 +205,20 @@ def tab(tab_id):
 
         overheat = request.form['overheat']
         overcool = request.form['overcool']
+        critical_overheat = request.form['critical_overheat']
+        critical_overcool = request.form['critical_overcool']
 
         if existing_range:
             cur.execute("""
                 UPDATE ranges
-                SET overheat = ?, overcool = ?
+                SET overheat = ?, overcool = ?, critical_overheat = ?, critical_overcool = ?
                 WHERE tab_id = ?
-            """, (overheat, overcool, tab_id))
+            """, (overheat, overcool, critical_overheat, critical_overcool, tab_id))
         else:
             cur.execute("""
-                INSERT INTO ranges (tab_id, overheat, overcool)
-                VALUES (?, ?, ?)
-            """, (tab_id, overheat, overcool))
+                INSERT INTO ranges (tab_id, overheat, overcool, critical_overheat, critical_overcool)
+                VALUES (?, ?, ?, ?, ?)
+            """, (tab_id, overheat, overcool, critical_overheat, critical_overcool))
 
         user_db.commit()
 
@@ -235,7 +236,10 @@ def tab(tab_id):
                 table_names = get_table_names()
                 data = {'tabs': tabs}
                 user_settings = None
-                return render_template('new_tab.html', tab_id=tab_id, table_names=table_names, data=data,
+                return render_template('new_tab.html',
+                                       tab_id=tab_id,
+                                       table_names=table_names,
+                                       data=data,
                                        user_settings=user_settings)
             else:
                 raise
@@ -249,8 +253,13 @@ def tab(tab_id):
         if tab_settings is None or range_data is None:
             data = {'tabs': tabs}
             user_settings = None
-            return render_template('new_tab.html', tab_id=tab_id, table_names=table_names, tab_settings=tab_settings,
-                                   range_data=range_data, data=data, user_settings=user_settings)
+            return render_template('new_tab.html',
+                                   tab_id=tab_id,
+                                   table_names=table_names,
+                                   tab_settings=tab_settings,
+                                   range_data=range_data,
+                                   data=data,
+                                   user_settings=user_settings)
         else:
             data = {
                 'tabs': tabs,
@@ -325,6 +334,12 @@ def tab(tab_id):
                 plot_data = []
                 overheat = range_data[1]
                 overcool = range_data[2]
+                if len(range_data) > 3:
+                    critical_overheat = range_data[3]
+                    critical_overcool = range_data[4]
+                else:
+                    critical_overheat = None
+                    critical_overcool = None
 
                 color_list = ['#FDB813', '#808000', '#00FFFF']  # Золотистый, Оливковый, Циан
 
@@ -366,6 +381,34 @@ def tab(tab_id):
                     }
                     plot_data.append(overcool_line)
 
+                    critical_overheat_line = {
+                        'x': [final_df.index.min(), final_df.index.max()],
+                        'y': [critical_overheat, critical_overheat],
+                        'mode': 'lines',
+                        'name': 'Критический перегрев',
+                        'showlegend': False,  # Не отображать в легенде
+                        'line': {
+                            'color': 'darkred',
+                            'width': 1.5,
+                            'dash': 'dot'
+                        }
+                    }
+                    plot_data.append(critical_overheat_line)
+
+                    critical_overcool_line = {
+                        'x': [final_df.index.min(), final_df.index.max()],
+                        'y': [critical_overcool, critical_overcool],
+                        'mode': 'lines',
+                        'name': 'Критическое переохлаждение',
+                        'showlegend': False,  # Не отображать в легенде
+                        'line': {
+                            'color': 'darkblue',
+                            'width': 1.5,
+                            'dash': 'dot'
+                        }
+                    }
+                    plot_data.append(critical_overcool_line)
+
                     incidents = get_incidents(tab_id, start_time=start_time_str, end_time=end_time_str)
             except KeyError:
                 flash("В базе отсутствуют данные за указанный диапазон", "warning")
@@ -374,7 +417,7 @@ def tab(tab_id):
             return render_template('tab.html', tab_id=tab_id, table_names=table_names, tabs=get_all_tabs(), data=data,
                                    tab_settings=tab_settings, user_settings=user_settings, range_data=range_data,
                                    final_df=final_df.reset_index().to_dict(orient='records'),
-                                   plot_data=json.dumps(plot_data), overheat=overheat, overcool=overcool,
+                                   plot_data=json.dumps(plot_data), overheat=overheat, overcool=overcool, critical_overheat=critical_overheat, critical_overcool=critical_overcool,
                                    incidents=incidents)
 
 
@@ -465,7 +508,9 @@ def save_ranges():
     tab_id = request.form['tab_id']
     overheat = request.form['overheat']
     overcool = request.form['overcool']
-    # print(f"Overheat: {overheat}, Overcool: {overcool}")
+    critical_overheat = request.form['critical_overheat']
+    critical_overcool = request.form['critical_overcool']
+
     db = get_user_db()
     cur = db.cursor()
 
@@ -475,7 +520,9 @@ def save_ranges():
             CREATE TABLE ranges (
                 tab_id INTEGER PRIMARY KEY,
                 overheat INTEGER,
-                overcool INTEGER
+                overcool INTEGER,
+                critical_overheat INTEGER,
+                critical_overcool INTEGER
             )
         """)
 
@@ -483,14 +530,14 @@ def save_ranges():
     if cur.fetchone():
         cur.execute("""
             UPDATE ranges
-            SET overheat = ?, overcool = ?
+            SET overheat = ?, overcool = ?, critical_overheat = ?, critical_overcool = ?
             WHERE tab_id = ?
-        """, (overheat, overcool, tab_id))
+        """, (overheat, overcool, critical_overheat, critical_overcool, tab_id))
     else:
         cur.execute("""
-            INSERT INTO ranges (tab_id, overheat, overcool)
-            VALUES (?, ?, ?)
-        """, (tab_id, overheat, overcool))
+            INSERT INTO ranges (tab_id, overheat, overcool, critical_overheat, critical_overcool)
+            VALUES (?, ?, ?, ?, ?)
+        """, (tab_id, overheat, overcool, critical_overheat, critical_overcool))
 
     db.commit()
 
