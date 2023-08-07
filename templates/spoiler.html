@@ -118,7 +118,7 @@
                                 <label for="overheat" class="form-label">Перегрев:</label>
                             </div>
                             <div class="col-auto">
-                                <input type="number" id="overheat" name="overheat" step="0.01" value="{{ range_data.overheat if range_data else '' }}" class="form-control">
+                                <input type="number" id="overheat" name="overheat" step="0.01" value="{{ range_data[1] if range_data else '' }}" class="form-control">
                             </div>
 
                             <div class="col-auto">
@@ -133,13 +133,13 @@
                                 <label for="overcool" class="form-label">Переохлаждение:</label>
                             </div>
                             <div class="col-auto">
-                                <input type="number" id="overcool" name="overcool" step="0.01" value="{{ range_data.overcool if range_data else '' }}" class="form-control">
+                                <input type="number" id="overcool" name="overcool" step="0.01" value="{{ range_data[2] if range_data else '' }}" class="form-control">
                             </div>
                             <div class="col-auto">
                                 <label class="form-label" for="critical_overcool">Критическое переохлаждение:</label>
                             </div>
                             <div class="col-auto">
-                                 <input class="form-control" id="critical_overcool" name="critical_overcool" step="0.01" type="number" value="{{ range_data[4] if range_data else '' }}"/>
+                                <input class="form-control" id="critical_overcool" name="critical_overcool" step="0.01" type="number" value="{{ range_data[4] if range_data else '' }}"/>
                             </div>
                         </div>
                         <div class="row g-3 align-items-center">
