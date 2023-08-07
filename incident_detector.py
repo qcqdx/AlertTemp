@@ -85,10 +85,11 @@ def delete_old_incidents(cursor):
 
 
 def get_tab_and_range(cursor, sensor_name):
-    # Получение tab_id, overheat и overcool из таблиц ranges и tab_settings
+    # Получение tab_id, overheat, overcool, critical_overheat и critical_overcool
+    # из таблиц ranges и tab_settings
     cursor.execute("""
         SELECT 
-            ranges.tab_id, ranges.overheat, ranges.overcool, 
+            ranges.tab_id, ranges.overheat, ranges.overcool, ranges.critical_overheat, ranges.critical_overcool, 
             CASE 
                 WHEN tab_settings.table1 = ? THEN tab_settings.table1_alias
                 WHEN tab_settings.table2 = ? THEN tab_settings.table2_alias
@@ -101,7 +102,7 @@ def get_tab_and_range(cursor, sensor_name):
         """, (sensor_name, sensor_name, sensor_name, sensor_name, sensor_name, sensor_name))
 
     result = cursor.fetchone()
-    return result if result else (None, None, None, None)
+    return result if result else (None, None, None, None, None, None)
 
 
 def get_peak_value(sensor, start_time, end_time, cursor):
@@ -158,7 +159,8 @@ def main():
                 peak_value = None  # Инициализация перед использованием
                 duration = None  # Инициализация перед использованием
                 sensor_name = sensor.replace('/', '_')
-                tab_id, overheat, overcool, sensor_alias = get_tab_and_range(settings_cur, sensor_name)
+                tab_id, overheat, overcool, critical_overheat, critical_overcool, sensor_alias = get_tab_and_range(
+                    settings_cur, sensor_name)
 
                 if tab_id is None or overheat is None or overcool is None:
                     continue
@@ -166,12 +168,16 @@ def main():
                 sensor = sensor_alias if sensor_alias else sensor_name
                 last_state = get_last_state(incidents_cur, sensor)
 
-                if value > overheat:
+                if value > critical_overheat:
+                    new_state = "Критический перегрев"
+                elif value < critical_overcool:
+                    new_state = "Критическое переохлаждение"
+                elif value > overheat:
                     new_state = "Перегрев"
                 elif value < overcool:
                     new_state = "Переохлаждение"
                 else:
-                    if last_state in ["Перегрев", "Переохлаждение"]:
+                    if last_state in ["Перегрев", "Переохлаждение", "Критический перегрев", "Критическое переохлаждение"]:
                         # Получение timestamp начала инцидента
                         incidents_cur.execute("SELECT datetime FROM incidents WHERE sensor = ? AND event = ? "
                                               "ORDER BY datetime DESC LIMIT 1", (sensor, last_state))
