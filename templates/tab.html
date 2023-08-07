@@ -143,7 +143,7 @@ document.getElementById('apply-range').addEventListener('click', function() {
 function setRange(days) {
     console.log("Setting range for:", days, "days");
     const now = new Date();
-    const start = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+    const start = new Date(now.getTime() - days * 27 * 60 * 60 * 1000);
 
     // Adjust for timezone offset
     now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
@@ -199,6 +199,31 @@ function setRange(days) {
                     color: 'blue',
                     size: 14
                 }
+            },
+            // Новые аннотации
+            {
+                x: 1,
+                y: {{ critical_overheat | safe }},
+                xref: 'paper',
+                yref: 'y',
+                text: 'Критический перегрев (' + {{ critical_overheat | safe }} + ')',
+                showarrow: true,
+                font: {
+                    color: 'darkred',
+                    size: 14
+                }
+            },
+            {
+                x: 1,
+                y: {{ critical_overcool | safe }},
+                xref: 'paper',
+                yref: 'y',
+                text: 'Критическое переохлаждение (' + {{ critical_overcool | safe }} + ')',
+                showarrow: true,
+                font: {
+                    color: 'darkblue',
+                    size: 14
+                }
             }
         ],
         legend: {
@@ -220,6 +245,7 @@ function setRange(days) {
     var config = {displayModeBar: true, displaylogo: false, locale: 'ru'};
     Plotly.newPlot('plot', plotData, layout, config);
 </script>
+
 
 <script>
 window.addEventListener('load', function() {
