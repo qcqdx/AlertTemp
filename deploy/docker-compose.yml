@@ -1,0 +1,54 @@
+name: coldwatch
+
+services:
+  db:
+    image: timescale/timescaledb:latest-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: coldwatch
+      POSTGRES_PASSWORD: ${COLDWATCH_DB_PASSWORD:?set in .env}
+      POSTGRES_DB: coldwatch
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U coldwatch"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  # Локальный брокер. Если контроллеры шлют данные во внешний брокер
+  # (например, 10.10.0.3), удалите этот сервис и укажите его адрес
+  # в COLDWATCH_MQTT_HOST в .env.
+  mqtt:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mqtt-data:/mosquitto/data
+
+  app:
+    build: ../backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      COLDWATCH_DATABASE_URL: postgresql+asyncpg://coldwatch:${COLDWATCH_DB_PASSWORD}@db:5432/coldwatch
+      COLDWATCH_MQTT_HOST: ${COLDWATCH_MQTT_HOST:-mqtt}
+      COLDWATCH_MQTT_PORT: ${COLDWATCH_MQTT_PORT:-1883}
+      COLDWATCH_MQTT_TOPIC_FILTER: ${COLDWATCH_MQTT_TOPIC_FILTER:-#}
+    ports:
+      # API доступен только с хоста: наружу — через reverse-proxy с TLS
+      # (аутентификация в приложении появляется в фазе 2)
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  db-data:
+  mqtt-data:
