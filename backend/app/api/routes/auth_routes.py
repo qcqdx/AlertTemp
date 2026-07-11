@@ -14,6 +14,7 @@ from app.core.security import (
     hash_password,
     verify_password,
 )
+from app.models.audit import record_audit
 from app.models.users import User
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
@@ -60,6 +61,7 @@ async def login(
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     token = await create_session(session, user.id)
+    record_audit(session, user.username, "login", "session")
     await session.commit()
     _set_cookie(response, token)
     return MeOut(id=user.id, username=user.username, full_name=user.full_name, role=user.role)

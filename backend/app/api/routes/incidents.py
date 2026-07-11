@@ -8,6 +8,8 @@ from app.api.auth import require_operator, require_viewer
 from app.api.schemas import IncidentAck, IncidentOut
 from app.core.db import get_session
 from app.models import Incident, IncidentStatus, IncidentType
+from app.models.audit import record_audit
+from app.models.users import User
 
 router = APIRouter(
     prefix="/api/v1/incidents", tags=["incidents"], dependencies=[Depends(require_viewer)]
@@ -54,16 +56,15 @@ async def open_incidents(session: AsyncSession = Depends(get_session)) -> list[I
     return list(result.scalars().all())
 
 
-@router.post(
-    "/{incident_id}/ack", response_model=IncidentOut, dependencies=[Depends(require_operator)]
-)
+@router.post("/{incident_id}/ack", response_model=IncidentOut)
 async def acknowledge_incident(
     incident_id: int,
-    body: IncidentAck,
+    body: IncidentAck | None = None,
     session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_operator),
 ) -> Incident:
     """Подтверждение: персонал видел аварию и работает с ней.
-    Останавливает эскалацию оповещений (фаза 3)."""
+    Кто подтвердил — из сессии; останавливает напоминания."""
     incident = await session.get(Incident, incident_id)
     if incident is None:
         raise HTTPException(status_code=404, detail="Incident not found")
@@ -73,10 +74,11 @@ async def acknowledge_incident(
         raise HTTPException(status_code=409, detail="Incident is already acknowledged")
 
     incident.status = IncidentStatus.ACKNOWLEDGED
-    incident.acknowledged_by = body.acknowledged_by
+    incident.acknowledged_by = (body.acknowledged_by if body else None) or user.full_name
     incident.acknowledged_at = datetime.now(UTC)
-    if body.note:
+    if body and body.note:
         incident.resolution_note = body.note
+    record_audit(session, user.username, "ack", "incident", incident_id)
     await session.commit()
     return incident
 

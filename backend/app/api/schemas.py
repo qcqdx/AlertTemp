@@ -181,7 +181,9 @@ class IncidentOut(BaseModel):
 
 
 class IncidentAck(BaseModel):
-    acknowledged_by: str = Field(min_length=1, max_length=200)
+    # кто подтвердил, берётся из сессии; поле оставлено для переопределения
+    # (например, оператор фиксирует устное подтверждение коллеги)
+    acknowledged_by: str | None = Field(default=None, min_length=1, max_length=200)
     note: str | None = None
 
 

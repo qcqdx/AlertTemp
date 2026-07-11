@@ -6,17 +6,20 @@ const discovered = ref([])
 const controllers = ref([])
 const recipients = ref([])
 const users = ref([])
+const audit = ref([])
 const error = ref('')
 const notice = ref('')
 let timer = null
 
 async function refresh() {
-  ;[discovered.value, controllers.value, recipients.value, users.value] = await Promise.all([
-    api.get('/api/v1/discovery'),
-    api.get('/api/v1/controllers?include_archived=false'),
-    api.get('/api/v1/notify/recipients'),
-    api.get('/api/v1/users'),
-  ])
+  ;[discovered.value, controllers.value, recipients.value, users.value, audit.value] =
+    await Promise.all([
+      api.get('/api/v1/discovery'),
+      api.get('/api/v1/controllers?include_archived=false'),
+      api.get('/api/v1/notify/recipients'),
+      api.get('/api/v1/users'),
+      api.get('/api/v1/audit?limit=50'),
+    ])
 }
 
 function run(action) {
@@ -265,6 +268,25 @@ onUnmounted(() => clearInterval(timer))
             </td>
           </tr>
           <tr v-if="!recipients.length"><td class="empty">Получатели не настроены — оповещения никому не уходят!</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Журнал изменений (аудит)</h2>
+    <div class="card" style="padding: 0; overflow-x: auto; max-height: 24rem; overflow-y: auto">
+      <table>
+        <thead>
+          <tr><th>Когда</th><th>Кто</th><th>Действие</th><th>Объект</th><th>Детали</th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="entry in audit" :key="entry.id">
+            <td>{{ fmt(entry.at) }}</td>
+            <td>{{ entry.actor }}</td>
+            <td>{{ entry.action }}</td>
+            <td>{{ entry.entity_type }}<template v-if="entry.entity_id"> #{{ entry.entity_id }}</template></td>
+            <td class="hint">{{ entry.detail ?? '' }}</td>
+          </tr>
+          <tr v-if="!audit.length"><td colspan="5" class="empty">Журнал пуст</td></tr>
         </tbody>
       </table>
     </div>

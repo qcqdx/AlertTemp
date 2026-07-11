@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.auth import require_admin
 from app.core.db import get_session
 from app.core.security import drop_user_sessions, hash_password
+from app.models.audit import record_audit
 from app.models.users import User, UserRole
 
 router = APIRouter(
@@ -44,7 +45,11 @@ async def list_users(session: AsyncSession = Depends(get_session)) -> list[User]
 
 
 @router.post("", response_model=UserOut, status_code=201)
-async def create_user(body: UserCreate, session: AsyncSession = Depends(get_session)) -> User:
+async def create_user(
+    body: UserCreate,
+    session: AsyncSession = Depends(get_session),
+    admin: User = Depends(require_admin),
+) -> User:
     duplicate = await session.execute(select(User.id).where(User.username == body.username))
     if duplicate.first() is not None:
         raise HTTPException(status_code=409, detail="Username already exists")
@@ -55,6 +60,10 @@ async def create_user(body: UserCreate, session: AsyncSession = Depends(get_sess
         role=body.role,
     )
     session.add(user)
+    await session.flush()
+    record_audit(
+        session, admin.username, "create", "user", user.id, f"{body.username} ({body.role})"
+    )
     await session.commit()
     return user
 
@@ -84,5 +93,9 @@ async def update_user(
         setattr(user, attr, value)
     if updates.get("enabled") is False:
         await drop_user_sessions(session, user.id)
+    audit_detail = {k: v for k, v in updates.items() if k != "password"}
+    if password:
+        audit_detail["password"] = "changed"
+    record_audit(session, admin.username, "update", "user", user_id, str(audit_detail))
     await session.commit()
     return user

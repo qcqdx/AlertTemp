@@ -7,6 +7,8 @@ from app.api.deps import get_rule_engine
 from app.api.schemas import ThresholdOut, ThresholdSet
 from app.core.db import get_session
 from app.models import Sensor, SensorStatus, ThresholdProfile
+from app.models.audit import record_audit
+from app.models.users import User
 from app.rules.engine import RuleEngine
 
 router = APIRouter(
@@ -59,9 +61,14 @@ async def set_thresholds(
     body: ThresholdSet,
     session: AsyncSession = Depends(get_session),
     engine: RuleEngine | None = Depends(get_rule_engine),
+    user: User = Depends(require_admin),
 ) -> ThresholdProfile:
     """Создаёт новую версию профиля порогов; прежние версии сохраняются,
-    открытые инциденты продолжают ссылаться на свою версию."""
+    открытые инциденты продолжают ссылаться на свою версию.
+
+    Детекция событийная: новые пороги применяются со следующим измерением
+    датчика (при штатном темпе ~1 Гц — практически сразу; молчащий датчик
+    покрыт offline-детектором)."""
     await _get_sensor(session, sensor_id)
 
     current = await session.execute(
@@ -92,6 +99,12 @@ async def set_thresholds(
         created_by=body.created_by,
     )
     session.add(profile)
+    await session.flush()
+    record_audit(
+        session, user.username, "set_thresholds", "sensor", sensor_id,
+        f"v{profile.version}: warn {body.warn_low}..{body.warn_high}, "
+        f"crit {body.crit_low}..{body.crit_high}",
+    )
     await session.commit()
 
     if engine is not None:

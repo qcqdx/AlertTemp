@@ -7,6 +7,8 @@ from app.api.auth import require_admin, require_viewer
 from app.api.schemas import ControllerCreate, ControllerOut, ControllerUpdate
 from app.core.db import get_session
 from app.models import Controller, ControllerStatus, Sensor, SensorStatus
+from app.models.audit import record_audit
+from app.models.users import User
 
 router = APIRouter(
     prefix="/api/v1/controllers",
@@ -39,14 +41,16 @@ async def list_controllers(
     return list(result.scalars().all())
 
 
-@router.post(
-    "", response_model=ControllerOut, status_code=201, dependencies=[Depends(require_admin)]
-)
+@router.post("", response_model=ControllerOut, status_code=201)
 async def create_controller(
-    body: ControllerCreate, session: AsyncSession = Depends(get_session)
+    body: ControllerCreate,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_admin),
 ) -> Controller:
     controller = Controller(name=body.name, location=body.location, notes=body.notes)
     session.add(controller)
+    await session.flush()
+    record_audit(session, user.username, "create", "controller", controller.id, body.name)
     await session.commit()
     return await _get_controller(session, controller.id)
 
@@ -58,28 +62,27 @@ async def get_controller(
     return await _get_controller(session, controller_id)
 
 
-@router.patch(
-    "/{controller_id}", response_model=ControllerOut, dependencies=[Depends(require_admin)]
-)
+@router.patch("/{controller_id}", response_model=ControllerOut)
 async def update_controller(
     controller_id: int,
     body: ControllerUpdate,
     session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_admin),
 ) -> Controller:
     controller = await _get_controller(session, controller_id)
-    for attr, value in body.model_dump(exclude_unset=True).items():
+    updates = body.model_dump(exclude_unset=True)
+    for attr, value in updates.items():
         setattr(controller, attr, value)
+    record_audit(session, user.username, "update", "controller", controller_id, str(updates))
     await session.commit()
     return await _get_controller(session, controller_id)
 
 
-@router.post(
-    "/{controller_id}/archive",
-    response_model=ControllerOut,
-    dependencies=[Depends(require_admin)],
-)
+@router.post("/{controller_id}/archive", response_model=ControllerOut)
 async def archive_controller(
-    controller_id: int, session: AsyncSession = Depends(get_session)
+    controller_id: int,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_admin),
 ) -> Controller:
     """Архивирование вместо удаления: история измерений и инцидентов обязана
     переживать вывод оборудования из эксплуатации."""
@@ -89,5 +92,6 @@ async def archive_controller(
     for sensor in result.scalars():
         sensor.status = SensorStatus.ARCHIVED
         sensor.position = None
+    record_audit(session, user.username, "archive", "controller", controller_id, controller.name)
     await session.commit()
     return await _get_controller(session, controller_id)

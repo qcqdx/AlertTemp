@@ -6,6 +6,8 @@ from app.api.auth import require_admin, require_viewer
 from app.api.schemas import DiscoveredTopicOut
 from app.core.db import get_session
 from app.models import DiscoveredTopic, DiscoveredTopicStatus
+from app.models.audit import record_audit
+from app.models.users import User
 
 router = APIRouter(
     prefix="/api/v1/discovery", tags=["discovery"], dependencies=[Depends(require_viewer)]
@@ -37,12 +39,15 @@ async def _get_discovered(session: AsyncSession, discovered_id: int) -> Discover
     dependencies=[Depends(require_admin)],
 )
 async def ignore_discovered(
-    discovered_id: int, session: AsyncSession = Depends(get_session)
+    discovered_id: int,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_admin),
 ) -> DiscoveredTopic:
     row = await _get_discovered(session, discovered_id)
     if row.status == DiscoveredTopicStatus.BOUND:
         raise HTTPException(status_code=409, detail="Topic is bound to a sensor")
     row.status = DiscoveredTopicStatus.IGNORED
+    record_audit(session, user.username, "ignore", "discovered_topic", row.id, row.topic)
     await session.commit()
     return row
 

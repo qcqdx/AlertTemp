@@ -2,11 +2,12 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import (
+    audit,
     auth_routes,
     controllers,
     discovery,
@@ -50,11 +51,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await rule_engine.start()
             app.state.rule_engine = rule_engine
 
+        # Оповещения — вспомогательный контур: любая ошибка их запуска
+        # (опечатка в прокси и т.п.) не имеет права останавливать сбор
+        # измерений. Канал отключается, ошибка видна в логе и /healthz.
         notifier = None
         if settings.telegram_bot_token:
-            notifier = TelegramNotifier(session_factory(), settings, bus)
-            await notifier.start()
-            app.state.notifier = notifier
+            try:
+                notifier = TelegramNotifier(session_factory(), settings, bus)
+                await notifier.start()
+                app.state.notifier = notifier
+            except Exception as exc:
+                logging.getLogger(__name__).error(
+                    "Notification channel FAILED to start: %s — notifications are "
+                    "DISABLED, measurement ingest continues",
+                    exc,
+                )
+                app.state.notifier_error = str(exc)
+                notifier = None
 
         mqtt = None
         if settings.mqtt_enabled:
@@ -78,12 +91,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(auth_routes.router)
     app.include_router(users.router)
     app.include_router(controllers.router)
+    app.include_router(sensors.read_router)
     app.include_router(sensors.router)
     app.include_router(discovery.router)
     app.include_router(measurements.router)
     app.include_router(thresholds.router)
     app.include_router(incidents.router)
     app.include_router(notify.router)
+    app.include_router(audit.router)
 
     # собранный web-интерфейс (frontend/dist), если лежит рядом
     static_dir = Path(settings.static_dir)
@@ -92,10 +107,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "/assets", StaticFiles(directory=static_dir / "assets"), name="assets"
         )
 
-        @app.get("/{path:path}", include_in_schema=False)
+        @app.api_route("/{path:path}", methods=["GET", "HEAD"], include_in_schema=False)
         async def spa(path: str) -> FileResponse:
-            # API-маршруты зарегистрированы раньше и матчятся первыми;
-            # всё остальное — SPA с client-side роутингом
+            # API-маршруты зарегистрированы раньше и матчятся первыми.
+            # Несуществующие API-пути НЕ должны отдавать index.html со
+            # статусом 200 — это маскирует ошибки клиентов и выглядит как
+            # анонимно доступный эндпойнт (находка P2 со стенда).
+            if path.startswith("api/") or path == "healthz":
+                raise HTTPException(status_code=404, detail="Not found")
             candidate = static_dir / path
             if path and ".." not in path and candidate.is_file():
                 return FileResponse(candidate)

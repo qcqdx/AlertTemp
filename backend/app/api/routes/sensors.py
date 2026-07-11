@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.auth import require_admin
+from app.api.auth import require_admin, require_viewer
 from app.api.deps import get_ingest_service, get_rule_engine
 from app.api.schemas import SensorCreate, SensorOut, SensorUpdate
 from app.core.db import get_session
@@ -16,11 +16,29 @@ from app.models import (
     Sensor,
     SensorStatus,
 )
+from app.models.audit import record_audit
+from app.models.users import User
 from app.rules.engine import RuleEngine
 
 router = APIRouter(
     prefix="/api/v1/sensors", tags=["sensors"], dependencies=[Depends(require_admin)]
 )
+# просмотр списка — любому аутентифицированному; мутации остаются админскими
+read_router = APIRouter(
+    prefix="/api/v1/sensors", tags=["sensors"], dependencies=[Depends(require_viewer)]
+)
+
+
+@read_router.get("", response_model=list[SensorOut])
+async def list_sensors(
+    include_archived: bool = False,
+    session: AsyncSession = Depends(get_session),
+) -> list[Sensor]:
+    query = select(Sensor).order_by(Sensor.controller_id, Sensor.position)
+    if not include_archived:
+        query = query.where(Sensor.status != SensorStatus.ARCHIVED)
+    result = await session.execute(query)
+    return list(result.scalars().all())
 
 
 async def _get_sensor(session: AsyncSession, sensor_id: int) -> Sensor:
@@ -45,6 +63,7 @@ async def create_sensor(
     session: AsyncSession = Depends(get_session),
     ingest: IngestService | None = Depends(get_ingest_service),
     engine: RuleEngine | None = Depends(get_rule_engine),
+    user: User = Depends(require_admin),
 ) -> Sensor:
     """Привязка id датчика (обычно — из очереди обнаружения) к контроллеру."""
     controller = await session.get(Controller, body.controller_id)
@@ -84,6 +103,11 @@ async def create_sensor(
     if discovered_row is not None:
         discovered_row.status = DiscoveredTopicStatus.BOUND
 
+    await session.flush()
+    record_audit(
+        session, user.username, "bind", "sensor", sensor.id,
+        f"{body.mqtt_topic} -> {body.alias}",
+    )
     await session.commit()
     if ingest is not None:
         ingest.invalidate_sensor_cache()
@@ -99,6 +123,7 @@ async def update_sensor(
     session: AsyncSession = Depends(get_session),
     ingest: IngestService | None = Depends(get_ingest_service),
     engine: RuleEngine | None = Depends(get_rule_engine),
+    user: User = Depends(require_admin),
 ) -> Sensor:
     sensor = await _get_sensor(session, sensor_id)
     updates = body.model_dump(exclude_unset=True)
@@ -136,6 +161,7 @@ async def update_sensor(
 
     for attr, value in updates.items():
         setattr(sensor, attr, value)
+    record_audit(session, user.username, "update", "sensor", sensor_id, str(updates))
     await session.commit()
     if ingest is not None:
         ingest.invalidate_sensor_cache()
@@ -150,12 +176,14 @@ async def archive_sensor(
     session: AsyncSession = Depends(get_session),
     ingest: IngestService | None = Depends(get_ingest_service),
     engine: RuleEngine | None = Depends(get_rule_engine),
+    user: User = Depends(require_admin),
 ) -> Sensor:
     """Замена/вывод датчика: история сохраняется, топик освобождается
     и снова появляется в очереди обнаружения."""
     sensor = await _get_sensor(session, sensor_id)
     sensor.status = SensorStatus.ARCHIVED
     sensor.position = None
+    record_audit(session, user.username, "archive", "sensor", sensor_id, sensor.alias)
     await session.commit()
     if ingest is not None:
         ingest.invalidate_sensor_cache()

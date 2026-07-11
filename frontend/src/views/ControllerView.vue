@@ -106,9 +106,8 @@ async function saveThresholds() {
 
 // ---------- инциденты ----------
 async function ack(incident) {
-  await api.post(`/api/v1/incidents/${incident.id}/ack`, {
-    acknowledged_by: auth.user.full_name,
-  })
+  // кто подтвердил — сервер берёт из сессии
+  await api.post(`/api/v1/incidents/${incident.id}/ack`)
   await refresh()
 }
 

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,6 +12,7 @@ router = APIRouter(tags=["health"])
 
 @router.get("/healthz")
 async def healthz(
+    request: Request,
     session: AsyncSession = Depends(get_session),
     ingest: IngestService | None = Depends(get_ingest_service),
     notifier: TelegramNotifier | None = Depends(get_notifier),
@@ -41,4 +42,10 @@ async def healthz(
             "failed": notifier.stats.failed,
             "last_error": notifier.stats.last_error,
         }
+    notifier_error = getattr(request.app.state, "notifier_error", None)
+    if notifier_error:
+        # канал оповещений не запустился (ошибка конфигурации);
+        # сбор данных работает, но статус — degraded
+        payload["notifier"] = {"error": notifier_error, "disabled": True}
+        payload["status"] = "degraded"
     return payload

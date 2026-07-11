@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     telegram_proxy: str | None = None
     notify_retry_attempts: int = 3
     notify_retry_delay_s: float = 2.0
+    # напоминания по открытым неподтверждённым инцидентам: интервал между
+    # напоминаниями (0 = выключить) и период проверки
+    notify_reminder_interval_s: int = 600
+    notify_reminder_check_s: float = 30.0
 
     # --- auth ---
     # пароль первичного администратора (логин admin); используется один раз,

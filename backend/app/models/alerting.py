@@ -109,6 +109,10 @@ class Incident(Base):
     acknowledged_by: Mapped[str | None] = mapped_column(String(200))
     acknowledged_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     resolution_note: Mapped[str | None] = mapped_column(Text)
+    # напоминания: пока инцидент открыт и не подтверждён, оповещение
+    # повторяется; подтверждение (ack) останавливает напоминания
+    reminder_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_reminder_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
 
 class SensorRuntimeState(Base):

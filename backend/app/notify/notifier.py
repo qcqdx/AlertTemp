@@ -14,7 +14,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.bus import EventBus, IncidentEvent
 from app.core.config import Settings
-from app.models import IncidentType
+from app.models import Controller, Incident, IncidentStatus, IncidentType, Sensor
 from app.models.notify import NotificationRecipient
 
 logger = logging.getLogger(__name__)
@@ -35,6 +35,32 @@ Transport = Callable[[str, dict], Awaitable[dict]]
 
 class NotifyError(Exception):
     pass
+
+
+class NotifyConfigError(Exception):
+    """Ошибка конфигурации канала. Ловится в lifespan: канал отключается,
+    приложение (и главный контур — сбор измерений) продолжает работать."""
+
+
+def normalize_proxy_url(url: str) -> tuple[str, bool]:
+    """Приводит proxy-URL к виду, который понимает aiohttp-socks.
+
+    curl-стиль `socks5h://` (резолвить DNS на прокси) поддерживается:
+    маппится в socks5 + rdns=True. Непонятная схема — явная ошибка
+    конфигурации, а не падение при первой отправке.
+    """
+    scheme = url.split("://", 1)[0].lower() if "://" in url else ""
+    rdns = False
+    if scheme in ("socks5h", "socks4a"):
+        url = url.replace(f"{scheme}://", f"{scheme[:-1]}://", 1)
+        rdns = True
+        scheme = scheme[:-1]
+    if scheme not in ("socks5", "socks4", "http"):
+        raise NotifyConfigError(
+            f"Unsupported proxy scheme {scheme!r} in COLDWATCH_TELEGRAM_PROXY: "
+            "use socks5://, socks5h://, socks4://, socks4a:// or http://"
+        )
+    return url, rdns
 
 
 @dataclass(slots=True)
@@ -107,6 +133,30 @@ def format_message(event: IncidentEvent, tz: ZoneInfo) -> str:
     return "\n".join(lines)
 
 
+def format_reminder(
+    incident: Incident,
+    controller_name: str,
+    sensor_alias: str,
+    tz: ZoneInfo,
+    now: datetime,
+) -> str:
+    key = (str(incident.type), str(incident.severity))
+    emoji = _EMOJI.get(key, "🚨")
+    title = _TITLES.get(key, str(incident.type))
+    duration = format_duration(now - incident.opened_at)
+    opened_local = incident.opened_at.astimezone(tz).strftime("%d.%m.%Y %H:%M:%S")
+    lines = [
+        f"⏰ <b>НЕ ПОДТВЕРЖДЁН</b> {emoji} {title} — "
+        f"<b>{controller_name}, {sensor_alias}</b>",
+        f"Инцидент продолжается уже <b>{duration}</b>, никто не отреагировал.",
+    ]
+    if incident.peak_value is not None:
+        lines.append(f"Пик: <b>{incident.peak_value} °C</b>")
+    lines.append(f"<i>Начало: {opened_local}</i>")
+    lines.append("Подтвердите инцидент в ColdWatch, чтобы остановить напоминания.")
+    return "\n".join(lines)
+
+
 class TelegramNotifier:
     def __init__(
         self,
@@ -122,6 +172,7 @@ class TelegramNotifier:
         self._http = None  # aiohttp.ClientSession
         self._queue: asyncio.Queue | None = None
         self._task: asyncio.Task | None = None
+        self._reminder_task: asyncio.Task | None = None
         self._stopping = False
         self._tz = ZoneInfo(settings.display_timezone)
         # (incident_id, chat_id) -> message_id открывшего сообщения
@@ -136,22 +187,94 @@ class TelegramNotifier:
             self._transport = await self._make_http_transport()
         self._queue = self._bus.subscribe()
         self._task = asyncio.create_task(self._consume_loop(), name="notifier")
+        if self._settings.notify_reminder_interval_s > 0:
+            self._reminder_task = asyncio.create_task(
+                self._reminder_loop(), name="notifier-reminders"
+            )
 
     async def stop(self) -> None:
         self._stopping = True
         if self._queue is not None:
             self._bus.unsubscribe(self._queue)
             self._queue = None
-        if self._task is not None:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-            self._task = None
+        for task_attr in ("_task", "_reminder_task"):
+            task = getattr(self, task_attr, None)
+            if task is not None:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                setattr(self, task_attr, None)
         if self._http is not None:
             await self._http.close()
             self._http = None
+
+    # ---------- напоминания ----------
+
+    async def _reminder_loop(self) -> None:
+        while not self._stopping:
+            await asyncio.sleep(self._settings.notify_reminder_check_s)
+            try:
+                await self.send_reminders()
+            except Exception:
+                logger.exception("Reminder pass failed")
+
+    async def send_reminders(self, now: datetime | None = None) -> int:
+        """Повторное оповещение по открытым НЕподтверждённым инцидентам.
+
+        Подтверждение (ack) или закрытие останавливают напоминания —
+        это и есть смысл кнопки «Подтвердить» для дежурной смены.
+        """
+        interval = self._settings.notify_reminder_interval_s
+        if interval <= 0:
+            return 0
+        now = now or datetime.now(UTC)
+        cutoff = now - timedelta(seconds=interval)
+        sent = 0
+
+        async with self._session_factory() as session:
+            rows = await session.execute(
+                select(Incident, Sensor.alias, Controller.name)
+                .join(Sensor, Sensor.id == Incident.sensor_id)
+                .join(Controller, Controller.id == Incident.controller_id)
+                .where(
+                    Incident.status == IncidentStatus.OPEN,
+                    Incident.opened_at <= cutoff,
+                )
+            )
+            due = [
+                (incident, alias, controller_name)
+                for incident, alias, controller_name in rows.all()
+                if incident.last_reminder_at is None or incident.last_reminder_at <= cutoff
+            ]
+            recipients = await session.execute(
+                select(NotificationRecipient).where(NotificationRecipient.enabled.is_(True))
+            )
+            chat_ids = [r.chat_id for r in recipients.scalars()]
+
+            for incident, alias, controller_name in due:
+                if not chat_ids:
+                    break
+                text = format_reminder(incident, controller_name, alias, self._tz, now)
+                delivered = False
+                for chat_id in chat_ids:
+                    try:
+                        await self._send_with_retry(
+                            {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+                        )
+                        self.stats.sent += 1
+                        delivered = True
+                    except Exception as exc:
+                        self.stats.failed += 1
+                        self.stats.last_error = str(exc)[:500]
+                        logger.error("Reminder to chat %s failed: %s", chat_id, exc)
+                if delivered:
+                    incident.last_reminder_at = now
+                    incident.reminder_count += 1
+                    sent += 1
+            await session.commit()
+        return sent
 
     async def _make_http_transport(self) -> Transport:
         import aiohttp
@@ -159,8 +282,14 @@ class TelegramNotifier:
         if self._settings.telegram_proxy:
             from aiohttp_socks import ProxyConnector
 
-            connector = ProxyConnector.from_url(self._settings.telegram_proxy)
-            logger.info("Telegram delivery goes through SOCKS proxy")
+            proxy_url, rdns = normalize_proxy_url(self._settings.telegram_proxy)
+            try:
+                connector = ProxyConnector.from_url(proxy_url, rdns=rdns)
+            except ValueError as exc:
+                raise NotifyConfigError(
+                    f"Invalid COLDWATCH_TELEGRAM_PROXY {self._settings.telegram_proxy!r}: {exc}"
+                ) from exc
+            logger.info("Telegram delivery goes through SOCKS proxy (rdns=%s)", rdns)
         else:
             connector = aiohttp.TCPConnector()
         self._http = aiohttp.ClientSession(
