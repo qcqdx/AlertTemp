@@ -18,6 +18,25 @@ class MeasurementEvent:
     at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class IncidentEvent:
+    """Переход жизненного цикла инцидента; несёт всё, что нужно
+    для формирования оповещения без похода в БД."""
+
+    kind: str  # opened | escalated | resolved
+    incident_id: int
+    sensor_id: int
+    sensor_alias: str
+    controller_id: int
+    controller_name: str
+    type: str  # IncidentType
+    severity: str  # IncidentSeverity
+    value: float | None
+    opened_at: datetime
+    closed_at: datetime | None = None
+    peak_value: float | None = None
+
+
 class EventBus:
     def __init__(self, queue_size: int = 1000) -> None:
         self._queue_size = queue_size

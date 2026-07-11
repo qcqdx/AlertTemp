@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     ingest_flush_interval_s: float = 1.0
     ingest_max_buffer: int = 500
 
+    # --- rule engine ---
+    rules_enabled: bool = True
+    offline_check_interval_s: float = 5.0
+
     # --- display ---
     display_timezone: str = "Europe/Moscow"
 

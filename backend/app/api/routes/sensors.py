@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_ingest_service
+from app.api.deps import get_ingest_service, get_rule_engine
 from app.api.schemas import SensorCreate, SensorOut, SensorUpdate
 from app.core.db import get_session
 from app.ingest.service import IngestService
@@ -15,6 +15,7 @@ from app.models import (
     Sensor,
     SensorStatus,
 )
+from app.rules.engine import RuleEngine
 
 router = APIRouter(prefix="/api/v1/sensors", tags=["sensors"])
 
@@ -40,6 +41,7 @@ async def create_sensor(
     body: SensorCreate,
     session: AsyncSession = Depends(get_session),
     ingest: IngestService | None = Depends(get_ingest_service),
+    engine: RuleEngine | None = Depends(get_rule_engine),
 ) -> Sensor:
     """Привязка id датчика (обычно — из очереди обнаружения) к контроллеру."""
     controller = await session.get(Controller, body.controller_id)
@@ -82,6 +84,8 @@ async def create_sensor(
     await session.commit()
     if ingest is not None:
         ingest.invalidate_sensor_cache()
+    if engine is not None:
+        engine.invalidate_sensor(sensor.id)
     return sensor
 
 
@@ -91,6 +95,7 @@ async def update_sensor(
     body: SensorUpdate,
     session: AsyncSession = Depends(get_session),
     ingest: IngestService | None = Depends(get_ingest_service),
+    engine: RuleEngine | None = Depends(get_rule_engine),
 ) -> Sensor:
     sensor = await _get_sensor(session, sensor_id)
     updates = body.model_dump(exclude_unset=True)
@@ -131,6 +136,8 @@ async def update_sensor(
     await session.commit()
     if ingest is not None:
         ingest.invalidate_sensor_cache()
+    if engine is not None:
+        engine.invalidate_sensor(sensor.id)
     return sensor
 
 
@@ -139,6 +146,7 @@ async def archive_sensor(
     sensor_id: int,
     session: AsyncSession = Depends(get_session),
     ingest: IngestService | None = Depends(get_ingest_service),
+    engine: RuleEngine | None = Depends(get_rule_engine),
 ) -> Sensor:
     """Замена/вывод датчика: история сохраняется, топик освобождается
     и снова появляется в очереди обнаружения."""
@@ -148,4 +156,6 @@ async def archive_sensor(
     await session.commit()
     if ingest is not None:
         ingest.invalidate_sensor_cache()
+    if engine is not None:
+        engine.invalidate_sensor(sensor.id)
     return sensor

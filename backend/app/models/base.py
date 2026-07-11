@@ -1,7 +1,24 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, MetaData, func
+from sqlalchemy import DateTime, MetaData, TypeDecorator, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+
+class UTCDateTime(TypeDecorator):
+    """timestamptz, который всегда читается как aware-UTC.
+
+    PostgreSQL возвращает aware-значения сам; SQLite (dev/тесты) теряет
+    таймзону — декоратор восстанавливает UTC, чтобы арифметика со временем
+    вела себя одинаково на обоих профилях.
+    """
+
+    impl = DateTime(timezone=True)
+    cache_ok = True
+
+    def process_result_value(self, value, dialect):
+        if value is not None and value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value
 
 NAMING_CONVENTION = {
     "ix": "ix_%(column_0_label)s",
@@ -18,10 +35,10 @@ class Base(DeclarativeBase):
 
 class TimestampMixin:
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
+        UTCDateTime(),
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,

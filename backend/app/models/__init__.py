@@ -1,3 +1,11 @@
+from app.models.alerting import (
+    Incident,
+    IncidentSeverity,
+    IncidentStatus,
+    IncidentType,
+    SensorRuntimeState,
+    ThresholdProfile,
+)
 from app.models.base import Base
 from app.models.devices import (
     SENSORS_PER_CONTROLLER,
@@ -16,7 +24,13 @@ __all__ = [
     "ControllerStatus",
     "DiscoveredTopic",
     "DiscoveredTopicStatus",
+    "Incident",
+    "IncidentSeverity",
+    "IncidentStatus",
+    "IncidentType",
     "Measurement",
     "Sensor",
+    "SensorRuntimeState",
     "SensorStatus",
+    "ThresholdProfile",
 ]

@@ -3,12 +3,21 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api.routes import controllers, discovery, health, measurements, sensors
+from app.api.routes import (
+    controllers,
+    discovery,
+    health,
+    incidents,
+    measurements,
+    sensors,
+    thresholds,
+)
 from app.core.bus import bus
 from app.core.config import Settings, get_settings
 from app.core.db import dispose_engine, init_engine, session_factory
 from app.ingest.mqtt import MqttIngest
 from app.ingest.service import IngestService
+from app.rules.engine import RuleEngine
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
@@ -26,6 +35,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await ingest_service.start()
         app.state.ingest_service = ingest_service
 
+        rule_engine = None
+        if settings.rules_enabled:
+            rule_engine = RuleEngine(session_factory(), settings, bus)
+            await rule_engine.start()
+            app.state.rule_engine = rule_engine
+
         mqtt = None
         if settings.mqtt_enabled:
             mqtt = MqttIngest(settings, ingest_service)
@@ -36,6 +51,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             if mqtt is not None:
                 await mqtt.stop()
+            if rule_engine is not None:
+                await rule_engine.stop()
             await ingest_service.stop()
             await dispose_engine()
 
@@ -45,6 +62,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(sensors.router)
     app.include_router(discovery.router)
     app.include_router(measurements.router)
+    app.include_router(thresholds.router)
+    app.include_router(incidents.router)
     return app
 
 

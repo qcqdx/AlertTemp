@@ -1,10 +1,10 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Enum, Float, String, Text
+from sqlalchemy import BigInteger, Enum, Float, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base
+from app.models.base import Base, UTCDateTime
 
 
 class DiscoveredTopicStatus(enum.StrEnum):
@@ -29,8 +29,8 @@ class DiscoveredTopic(Base):
         default=DiscoveredTopicStatus.NEW,
         nullable=False,
     )
-    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    first_seen: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    last_seen: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     message_count: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     last_value: Mapped[float | None] = mapped_column(Float)
     error_count: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)

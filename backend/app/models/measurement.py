@@ -1,9 +1,9 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index
+from sqlalchemy import Float, ForeignKey, Index
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base
+from app.models.base import Base, UTCDateTime
 
 
 class Measurement(Base):
@@ -17,5 +17,5 @@ class Measurement(Base):
     sensor_id: Mapped[int] = mapped_column(
         ForeignKey("sensor.id", ondelete="RESTRICT"), primary_key=True
     )
-    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    time: Mapped[datetime] = mapped_column(UTCDateTime(), primary_key=True)
     value: Mapped[float] = mapped_column(Float, nullable=False)
