@@ -78,6 +78,43 @@ async def update_controller(
     return await _get_controller(session, controller_id)
 
 
+@router.put("/{controller_id}/sensor-order", response_model=ControllerOut)
+async def reorder_sensors(
+    controller_id: int,
+    order: list[int],
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_admin),
+) -> Controller:
+    """Переупорядочивание датчиков: тело — список sensor_id в желаемом
+    порядке позиций 1..N. PATCH по одному датчику упирается в уникальность
+    позиций (swap 1<->2 даёт 409 в обе стороны) — здесь перестановка
+    выполняется одной транзакцией."""
+    controller = await _get_controller(session, controller_id)
+    active = [s for s in controller.sensors if s.status != SensorStatus.ARCHIVED]
+    if sorted(order) != sorted(s.id for s in active):
+        raise HTTPException(
+            status_code=422,
+            detail="order must contain exactly the controller's active sensor ids",
+        )
+
+    by_id = {s.id: s for s in active}
+    # освобождаем позиции перед назначением, иначе уникальный индекс
+    # (controller_id, position) отвергнет промежуточное состояние
+    for sensor in active:
+        sensor.position = None
+    await session.flush()
+    for position, sensor_id in enumerate(order, start=1):
+        by_id[sensor_id].position = position
+    record_audit(
+        session, user.username, "reorder", "controller", controller_id, str(order)
+    )
+    await session.commit()
+    # сбрасываем identity map: коллекция sensors должна перечитаться
+    # в новом порядке позиций, а не вернуться из кэша сессии
+    session.expire_all()
+    return await _get_controller(session, controller_id)
+
+
 @router.post("/{controller_id}/archive", response_model=ControllerOut)
 async def archive_controller(
     controller_id: int,

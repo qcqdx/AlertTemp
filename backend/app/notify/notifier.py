@@ -65,6 +65,10 @@ def normalize_proxy_url(url: str) -> tuple[str, bool]:
 
 @dataclass(slots=True)
 class NotifierStats:
+    """Счётчики in-memory: рестарт обнуляет consecutive_failures, т.е.
+    после рестарта статус канала ok до первой фактической неудачи —
+    известное поведение (зафиксировано отчётом стенда фазы 3.5)."""
+
     sent: int = 0
     failed: int = 0
     consecutive_failures: int = 0
@@ -157,6 +161,29 @@ def format_reminder_digest(
     if len(items) > DIGEST_MAX_LINES:
         lines.append(f"…и ещё {len(items) - DIGEST_MAX_LINES}")
     lines.append("Подтвердите инциденты в ColdWatch, чтобы остановить напоминания.")
+    return "\n".join(lines)
+
+
+def format_event_digest(events: list[IncidentEvent], tz: ZoneInfo) -> str:
+    """Сводка одновременных событий одним сообщением: отказ роутера/брокера
+    площадки на целевом масштабе — это 90 offline разом; 90 отдельных
+    сообщений при открытии и ещё 90 при закрытии убивают канал."""
+    opened = sum(1 for e in events if e.kind in ("opened", "escalated"))
+    resolved = len(events) - opened
+    header_parts = []
+    if opened:
+        header_parts.append(f"новых: {opened}")
+    if resolved:
+        header_parts.append(f"закрыто: {resolved}")
+    lines = [f"🚨 <b>Событий: {len(events)}</b> ({', '.join(header_parts)})"]
+    for event in events[:DIGEST_MAX_LINES]:
+        key = (str(event.type), str(event.severity))
+        emoji = "🍀" if event.kind == "resolved" else _EMOJI.get(key, "🚨")
+        title = "Возврат в норму" if event.kind == "resolved" else _TITLES.get(key, str(event.type))
+        value = f" ({event.value} °C)" if event.value is not None else ""
+        lines.append(f"{emoji} {title} — {event.controller_name}, {event.sensor_alias}{value}")
+    if len(events) > DIGEST_MAX_LINES:
+        lines.append(f"…и ещё {len(events) - DIGEST_MAX_LINES}")
     return "\n".join(lines)
 
 
@@ -361,10 +388,56 @@ class TelegramNotifier:
             event = await self._queue.get()
             if not isinstance(event, IncidentEvent):
                 continue
+            batch = [event]
+            window = self._settings.notify_group_window_s
+            if window > 0:
+                # собираем одновременные события: групповой сбой уходит
+                # одной сводкой, а не залпом отдельных сообщений
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + window
+                while True:
+                    remaining = deadline - loop.time()
+                    if remaining <= 0:
+                        break
+                    try:
+                        extra = await asyncio.wait_for(self._queue.get(), remaining)
+                    except TimeoutError:
+                        break
+                    if isinstance(extra, IncidentEvent):
+                        batch.append(extra)
             try:
-                await self.deliver(event)
+                await self.deliver_batch(batch)
             except Exception:
-                logger.exception("Notifier failed on %s", event)
+                logger.exception("Notifier failed on batch of %d", len(batch))
+
+    async def deliver_batch(self, events: list[IncidentEvent]) -> None:
+        if len(events) == 1:
+            await self.deliver(events[0])
+            return
+        if not self._settings.telegram_bot_token and self._transport is None:
+            return
+        recipients = await self._recipients()
+        if not recipients:
+            return
+        text = format_event_digest(events, self._tz)
+        # в сводке reply-цепочки не ведутся; закрытые в сводке инциденты
+        # освобождают сохранённые message_id
+        for event in events:
+            if event.kind == "resolved":
+                for recipient in recipients:
+                    self._thread_ids.pop((event.incident_id, recipient.chat_id), None)
+        for recipient in recipients:
+            try:
+                await self._send_with_retry(
+                    {"chat_id": recipient.chat_id, "text": text, "parse_mode": "HTML"}
+                )
+                self.stats.sent += 1
+                self.stats.consecutive_failures = 0
+            except Exception as exc:
+                self.stats.failed += 1
+                self.stats.consecutive_failures += 1
+                self.stats.last_error = str(exc)[:500]
+                logger.error("Failed to notify chat %s: %s", recipient.chat_id, exc)
 
     async def _recipients(self) -> list[NotificationRecipient]:
         async with self._session_factory() as session:

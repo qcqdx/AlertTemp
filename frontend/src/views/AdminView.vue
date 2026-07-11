@@ -84,6 +84,19 @@ function saveSensor() {
   })
 }
 
+function moveSensor(controller, sensor, delta) {
+  const active = controller.sensors
+    .filter((s) => s.status !== 'archived')
+    .sort((a, b) => a.position - b.position)
+  const index = active.findIndex((s) => s.id === sensor.id)
+  const target = index + delta
+  if (target < 0 || target >= active.length) return
+  ;[active[index], active[target]] = [active[target], active[index]]
+  return run(() =>
+    api.put(`/api/v1/controllers/${controller.id}/sensor-order`, active.map((s) => s.id))
+  )
+}
+
 function archiveSensor(sensor) {
   if (!confirm(`Архивировать датчик «${sensor.alias}»? История сохранится.`)) return
   return run(() => api.post(`/api/v1/sensors/${sensor.id}/archive`))
@@ -226,6 +239,8 @@ onUnmounted(() => clearInterval(timer))
               <td><code>{{ sensor.mqtt_topic }}</code></td>
               <td class="hint">таймаут {{ sensor.heartbeat_timeout_s }} с</td>
               <td class="form-row" style="margin: 0">
+                <button @click="moveSensor(controller, sensor, -1)" title="Выше">↑</button>
+                <button @click="moveSensor(controller, sensor, 1)" title="Ниже">↓</button>
                 <button @click="startSensorEdit(sensor)">Изменить</button>
                 <button class="danger" @click="archiveSensor(sensor)">Архив</button>
               </td>

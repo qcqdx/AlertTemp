@@ -79,7 +79,11 @@ async def delete_recipient(
 
 @router.post("/test")
 async def send_test(notifier: TelegramNotifier | None = Depends(get_notifier)) -> dict:
-    """Тестовое сообщение всем включённым получателям."""
+    """Тестовое сообщение всем включённым получателям.
+
+    Осознанно НЕ влияет на статистику доставки (failed/consecutive_failures/
+    деградацию): тест — диагностика оператора, а не боевая доставка;
+    результат по каждому получателю возвращается в теле ответа."""
     if notifier is None:
         raise HTTPException(status_code=503, detail="Notifier is not configured")
     return await notifier.send_test()

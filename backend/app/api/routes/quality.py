@@ -71,6 +71,7 @@ class SensorQuality(BaseModel):
 class ControllerQuality(BaseModel):
     controller_id: int
     window: str
+    basis: str  # current | historical — семантика расчёта «вне диапазона»
     start: datetime
     end: datetime
     sensors: list[SensorQuality]
@@ -78,13 +79,14 @@ class ControllerQuality(BaseModel):
 
 async def _minute_buckets(
     session: AsyncSession, sensor_id: int, start: datetime, end: datetime
-) -> list[tuple[float, float, float, int]]:
-    """(avg, min, max, count) на минуту; PostgreSQL — из continuous aggregate."""
+) -> list[tuple[datetime, float, float, float, int]]:
+    """(bucket_time, avg, min, max, count) на минуту;
+    PostgreSQL — из continuous aggregate."""
     if session.get_bind().dialect.name == "postgresql":
         rows = await session.execute(
             text(
                 """
-                SELECT sum_value / sample_count AS avg_value,
+                SELECT bucket, sum_value / sample_count AS avg_value,
                        min_value, max_value, sample_count
                 FROM measurement_1m
                 WHERE sensor_id = :sensor_id AND bucket >= :start AND bucket <= :end
@@ -92,30 +94,71 @@ async def _minute_buckets(
             ),
             {"sensor_id": sensor_id, "start": start, "end": end},
         )
-        return [(r.avg_value, r.min_value, r.max_value, r.sample_count) for r in rows]
+        return [
+            (r.bucket, r.avg_value, r.min_value, r.max_value, r.sample_count) for r in rows
+        ]
 
     # SQLite (dev/тесты): группировка сырых измерений по минутам
     rows = await session.execute(
         text(
             """
-            SELECT avg(value) AS avg_value, min(value) AS min_value,
+            SELECT (CAST(strftime('%s', time) AS INTEGER) / 60) * 60 AS bucket_epoch,
+                   avg(value) AS avg_value, min(value) AS min_value,
                    max(value) AS max_value, count(*) AS sample_count
             FROM measurement
             WHERE sensor_id = :sensor_id AND time >= :start AND time <= :end
-            GROUP BY CAST(strftime('%s', time) AS INTEGER) / 60
+            GROUP BY bucket_epoch
             """
         ),
         {"sensor_id": sensor_id, "start": start, "end": end},
     )
-    return [(r.avg_value, r.min_value, r.max_value, r.sample_count) for r in rows]
+    return [
+        (
+            datetime.fromtimestamp(r.bucket_epoch, tz=UTC),
+            r.avg_value,
+            r.min_value,
+            r.max_value,
+            r.sample_count,
+        )
+        for r in rows
+    ]
+
+
+def _profile_at(
+    profiles: list[ThresholdProfile], at: datetime
+) -> ThresholdProfile | None:
+    """Профиль, действовавший на момент измерения: последняя версия,
+    созданная не позже этого момента (profiles отсортированы по created_at)."""
+    applicable = None
+    for profile in profiles:
+        if profile.created_at <= at:
+            applicable = profile
+        else:
+            break
+    return applicable
 
 
 @router.get("/controllers/{controller_id}/quality", response_model=ControllerQuality)
 async def controller_quality(
     controller_id: int,
     window: Literal["24h", "7d", "30d"] = Query(default="24h"),
+    basis: Literal["current", "historical"] = Query(default="current"),
     session: AsyncSession = Depends(get_session),
 ) -> ControllerQuality:
+    """Качество хранения за окно.
+
+    basis=current — «вне диапазона» по ТЕКУЩЕМУ активному профилю: интерактивный
+    режим («как выглядит прошлое на нынешних требованиях»); смена порогов
+    меняет и прошлое в этом представлении.
+
+    basis=historical — по профилю, ДЕЙСТВОВАВШЕМУ на момент каждого измерения:
+    семантика для журналов и печатных форм — отчёт за период воспроизводим
+    независимо от последующих правок порогов. Минуты до первой активации
+    порогов в «вне диапазона» не входят (нарушение не было определено).
+
+    Бюджет стабильности в обоих режимах берётся из текущего активного профиля:
+    бюджет — свойство препаратов, находящихся в холодильнике сейчас.
+    """
     controller = await session.get(Controller, controller_id)
     if controller is None:
         raise HTTPException(status_code=404, detail="Controller not found")
@@ -132,25 +175,33 @@ async def controller_quality(
     )
     items: list[SensorQuality] = []
     for sensor in sensors.scalars():
-        profile_row = await session.execute(
-            select(ThresholdProfile).where(
-                ThresholdProfile.sensor_id == sensor.id, ThresholdProfile.active.is_(True)
-            )
+        profiles_rows = await session.execute(
+            select(ThresholdProfile)
+            .where(ThresholdProfile.sensor_id == sensor.id)
+            .order_by(ThresholdProfile.created_at)
         )
-        profile = profile_row.scalar_one_or_none()
+        profiles = list(profiles_rows.scalars().all())
+        active = next((p for p in profiles if p.active), None)
 
         buckets = await _minute_buckets(session, sensor.id, start, end)
-        temps = [b[0] for b in buckets]
-        samples = sum(b[3] for b in buckets)
+        temps = [b[1] for b in buckets]
+        samples = sum(b[4] for b in buckets)
 
         out_above_s = out_below_s = out_total_s = None
         budget_used = None
-        if profile is not None and buckets:
-            out_above_s = sum(60 for b in buckets if b[0] > profile.warn_high)
-            out_below_s = sum(60 for b in buckets if b[0] < profile.warn_low)
+        if active is not None and buckets:
+            out_above_s = out_below_s = 0
+            for bucket_time, avg_value, _, _, _ in buckets:
+                profile = active if basis == "current" else _profile_at(profiles, bucket_time)
+                if profile is None:
+                    continue  # historical: порогов ещё не существовало
+                if avg_value > profile.warn_high:
+                    out_above_s += 60
+                elif avg_value < profile.warn_low:
+                    out_below_s += 60
             out_total_s = out_above_s + out_below_s
-            if profile.stability_budget_h:
-                budget_used = round(out_total_s / (profile.stability_budget_h * 3600), 4)
+            if active.stability_budget_h:
+                budget_used = round(out_total_s / (active.stability_budget_h * 3600), 4)
 
         items.append(
             SensorQuality(
@@ -160,17 +211,22 @@ async def controller_quality(
                 minutes_with_data=len(buckets),
                 coverage=round(min(len(buckets) / window_minutes, 1.0), 4),
                 avg=round(sum(temps) / len(temps), 3) if temps else None,
-                min=round(min(b[1] for b in buckets), 3) if buckets else None,
-                max=round(max(b[2] for b in buckets), 3) if buckets else None,
+                min=round(min(b[2] for b in buckets), 3) if buckets else None,
+                max=round(max(b[3] for b in buckets), 3) if buckets else None,
                 mkt=mean_kinetic_temperature(temps, delta_h_over_r),
                 out_above_s=out_above_s,
                 out_below_s=out_below_s,
                 out_total_s=out_total_s,
-                stability_budget_h=profile.stability_budget_h if profile else None,
+                stability_budget_h=active.stability_budget_h if active else None,
                 budget_used=budget_used,
             )
         )
 
     return ControllerQuality(
-        controller_id=controller_id, window=window, start=start, end=end, sensors=items
+        controller_id=controller_id,
+        window=window,
+        basis=basis,
+        start=start,
+        end=end,
+        sensors=items,
     )

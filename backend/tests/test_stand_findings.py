@@ -344,3 +344,147 @@ async def test_consecutive_failures_tracked(engine, session_factory, settings):
     transport.fail = False
     await notifier.deliver(make_event(incident_id=99))
     assert notifier.stats.consecutive_failures == 0
+
+
+# ---------- отчёт фазы 3.5: P7 (digest событий), P8 (reorder), quality basis ----------
+
+
+async def test_event_digest_for_simultaneous_incidents(engine, session_factory, settings):
+    """P7: групповой сбой — одно сообщение-сводка вместо залпа открытий."""
+    from app.core.bus import EventBus
+    from app.notify.notifier import TelegramNotifier
+    from tests.test_notifier import StubTransport, make_event
+
+    transport = StubTransport()
+    notifier = TelegramNotifier(session_factory, settings, EventBus(), transport=transport)
+    async with session_factory() as session:
+        session.add(NotificationRecipient(name="Д", chat_id="1", enabled=True))
+        await session.commit()
+
+    events = [
+        make_event(incident_id=i, type="offline", severity="critical", value=None)
+        for i in range(1, 91)
+    ]
+    await notifier.deliver_batch(events)
+
+    assert len(transport.calls) == 1
+    text = transport.calls[0]["text"]
+    assert "Событий: 90" in text and "новых: 90" in text
+    assert "…и ещё 70" in text
+
+    # одиночное событие идёт прежним путём с полным форматом
+    await notifier.deliver_batch([make_event(incident_id=100)])
+    assert len(transport.calls) == 2
+    assert "Перегрев" in transport.calls[1]["text"]
+    assert "Событий" not in transport.calls[1]["text"]
+
+
+async def test_event_digest_mixed_open_resolve(engine, session_factory, settings):
+    from app.core.bus import EventBus
+    from app.notify.notifier import TelegramNotifier
+    from tests.test_notifier import StubTransport, make_event
+
+    transport = StubTransport()
+    notifier = TelegramNotifier(session_factory, settings, EventBus(), transport=transport)
+    async with session_factory() as session:
+        session.add(NotificationRecipient(name="Д", chat_id="1", enabled=True))
+        await session.commit()
+
+    events = [
+        make_event(incident_id=1, kind="opened"),
+        make_event(incident_id=2, kind="resolved", closed_at=datetime.now(UTC)),
+    ]
+    await notifier.deliver_batch(events)
+    text = transport.calls[0]["text"]
+    assert "новых: 1" in text and "закрыто: 1" in text
+    assert "🍀" in text
+
+
+async def test_sensor_reorder(client):
+    """P8: swap позиций одной транзакцией."""
+    controller = (await client.post("/api/v1/controllers", json={"name": "Реордер"})).json()
+    ids = []
+    for position in (1, 2, 3):
+        response = await client.post(
+            "/api/v1/sensors",
+            json={
+                "controller_id": controller["id"],
+                "mqtt_topic": f"t/ord{position}",
+                "alias": f"Датчик {position}",
+                "position": position,
+            },
+        )
+        ids.append(response.json()["id"])
+
+    # переворачиваем порядок: [3,2,1]
+    response = await client.put(
+        f"/api/v1/controllers/{controller['id']}/sensor-order", json=ids[::-1]
+    )
+    assert response.status_code == 200
+    sensors = response.json()["sensors"]
+    assert [(s["id"], s["position"]) for s in sensors] == [
+        (ids[2], 1),
+        (ids[1], 2),
+        (ids[0], 3),
+    ]
+
+    # неполный список отклоняется
+    response = await client.put(
+        f"/api/v1/controllers/{controller['id']}/sensor-order", json=ids[:2]
+    )
+    assert response.status_code == 422
+
+
+async def test_quality_basis_historical(client, session_factory):
+    """Смена порогов не переписывает прошлое в historical-режиме."""
+    from datetime import timedelta
+
+    from app.models import Measurement, ThresholdProfile
+
+    now = datetime.now(UTC).replace(second=0, microsecond=0)
+    async with session_factory() as session:
+        controller = Controller(name="История")
+        session.add(controller)
+        await session.flush()
+        sensor = Sensor(controller_id=controller.id, mqtt_topic="t/hist", alias="П", position=1)
+        session.add(sensor)
+        await session.flush()
+        # профиль v1 (2..8) действовал во время данных; создан 3 часа назад
+        session.add(
+            ThresholdProfile(
+                sensor_id=sensor.id, version=1, active=False,
+                warn_low=2.0, warn_high=8.0,
+                created_at=now - timedelta(hours=3),
+            )
+        )
+        # текущий профиль v2 (2..10) создан позже всех данных
+        session.add(
+            ThresholdProfile(
+                sensor_id=sensor.id, version=2, active=True,
+                warn_low=2.0, warn_high=10.0,
+                created_at=now - timedelta(minutes=1),
+            )
+        )
+        # два часа данных по 9°C: выше 8 (v1), ниже 10 (v2)
+        for minute in range(120):
+            session.add(
+                Measurement(
+                    sensor_id=sensor.id,
+                    time=now - timedelta(hours=2, minutes=1) + timedelta(minutes=minute),
+                    value=9.0,
+                )
+            )
+        await session.commit()
+        controller_id = controller.id
+
+    current = (
+        await client.get(f"/api/v1/controllers/{controller_id}/quality?basis=current")
+    ).json()["sensors"][0]
+    historical = (
+        await client.get(f"/api/v1/controllers/{controller_id}/quality?basis=historical")
+    ).json()["sensors"][0]
+
+    # по текущему профилю (до 10) нарушений нет — «прошлое переписано»
+    assert current["out_total_s"] == 0
+    # по действовавшему тогда профилю (до 8) — все 120 минут вне диапазона
+    assert historical["out_total_s"] == 120 * 60
