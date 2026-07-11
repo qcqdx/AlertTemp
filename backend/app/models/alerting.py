@@ -61,6 +61,9 @@ class ThresholdProfile(Base):
     # гистерезис: выход из аварийной зоны фиксируется только при заходе
     # за порог на эту величину — убирает дребезг при дрейфе вокруг порога
     hysteresis: Mapped[float] = mapped_column(Float, nullable=False, default=0.3)
+    # бюджет стабильности: суммарно допустимое время вне диапазона (часы)
+    # для препаратов в этом холодильнике; None = не задан
+    stability_budget_h: Mapped[float | None] = mapped_column(Float)
     # минимальная длительность нарушения до открытия инцидента:
     # короткий заброс от открытой дверцы — не авария
     warn_delay_s: Mapped[int] = mapped_column(Integer, nullable=False, default=300)
@@ -101,7 +104,10 @@ class Incident(Base):
     # а не момент, когда истекла задержка и инцидент открылся
     opened_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, index=True)
     closed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    # значение в момент выхода за порог (соответствует opened_at)
     open_value: Mapped[float | None] = mapped_column(Float)
+    # значение в момент фиксации инцидента (после истечения задержки)
+    confirm_value: Mapped[float | None] = mapped_column(Float)
     peak_value: Mapped[float | None] = mapped_column(Float)
     threshold_profile_id: Mapped[int | None] = mapped_column(
         ForeignKey("threshold_profile.id", ondelete="RESTRICT")

@@ -106,6 +106,7 @@ class _SensorState:
     incident_side: str | None = None
     incident_severity: IncidentSeverity | None = None
     incident_opened_at: datetime | None = None
+    pending_first_value: float | None = None
     peak_value: float | None = None
     last_seen: datetime | None = None
     offline_incident_id: int | None = None
@@ -261,6 +262,7 @@ class RuleEngine:
         if state.pending_zone != zone:
             state.pending_zone = zone
             state.pending_since = event.at
+            state.pending_first_value = event.value
 
         # эскалация ждёт свою задержку, деэскалация и возврат в норму — мгновенны
         # (дребезг уже отсечён гистерезисом)
@@ -322,6 +324,12 @@ class RuleEngine:
                     IncidentSeverity.CRITICAL if _RANK[zone] == 2 else IncidentSeverity.WARNING
                 )
                 if state.incident_id is None:
+                    open_value = (
+                        state.pending_first_value
+                        if state.pending_first_value is not None
+                        else event.value
+                    )
+                    worst = max if new_side == "high" else min
                     incident = Incident(
                         sensor_id=info.sensor_id,
                         controller_id=info.controller_id,
@@ -329,8 +337,9 @@ class RuleEngine:
                         severity=severity,
                         status=IncidentStatus.OPEN,
                         opened_at=state.pending_since or event.at,
-                        open_value=event.value,
-                        peak_value=event.value,
+                        open_value=open_value,
+                        confirm_value=event.value,
+                        peak_value=worst(open_value, event.value),
                         threshold_profile_id=thresholds.profile_id,
                     )
                     session.add(incident)
@@ -339,7 +348,7 @@ class RuleEngine:
                     state.incident_side = new_side
                     state.incident_severity = severity
                     state.incident_opened_at = incident.opened_at
-                    state.peak_value = event.value
+                    state.peak_value = incident.peak_value
                     self._emit("opened", incident.id, info, incident.type, severity, event)
                 elif (
                     severity == IncidentSeverity.CRITICAL

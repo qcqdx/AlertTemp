@@ -245,3 +245,102 @@ async def test_audit_requires_admin(engine, settings, ingest, session_factory):
     app = build_app(settings, ingest)
     client = await login_client(app, "op2", "operator-pass")
     assert (await client.get("/api/v1/audit")).status_code == 403
+
+
+# ---------- напоминания на масштабе (отчёт фазы 3, п.5) ----------
+
+
+async def seed_many_incidents(session_factory, count: int, opened_ago_s=1200) -> None:
+    async with session_factory() as session:
+        controller = Controller(name="Площадка")
+        session.add(controller)
+        await session.flush()
+        for i in range(count):
+            sensor = Sensor(
+                controller_id=controller.id,
+                mqtt_topic=f"t/mass{i}",
+                alias=f"Датчик {i}",
+                position=None,
+            )
+            session.add(sensor)
+            await session.flush()
+            session.add(
+                Incident(
+                    sensor_id=sensor.id,
+                    controller_id=controller.id,
+                    type=IncidentType.OFFLINE,
+                    severity=IncidentSeverity.CRITICAL,
+                    status=IncidentStatus.OPEN,
+                    opened_at=datetime.now(UTC) - timedelta(seconds=opened_ago_s),
+                )
+            )
+        await session.commit()
+
+
+async def test_mass_incidents_collapse_into_digest(reminder_notifier, session_factory):
+    """Групповой сбой (роутер площадки): 90 offline = ОДНО сообщение-сводка,
+    а не 90 отдельных."""
+    notifier, transport = reminder_notifier
+    await seed_many_incidents(session_factory, 90)
+
+    processed = await notifier.send_reminders()
+    assert processed == 90
+    assert len(transport.calls) == 1  # один получатель — одно сообщение
+    text = transport.calls[0]["text"]
+    assert "90 инцидентов" in text
+    assert "…и ещё 70" in text  # в сводке максимум 20 строк
+
+    # до следующего интервала — тишина по всем 90
+    assert await notifier.send_reminders() == 0
+
+
+async def test_reminder_grace_after_restart(reminder_notifier, session_factory):
+    """Рестарт поверх старых неподтверждённых не даёт немедленного шторма:
+    первое напоминание — не раньше полного интервала от старта."""
+    notifier, transport = reminder_notifier
+    await seed_incident(session_factory, opened_ago_s=3900)  # инциденту 65 минут
+
+    notifier._started_at = datetime.now(UTC)  # только что «перезапустились»
+    assert await notifier.send_reminders() == 0
+    assert transport.calls == []
+
+    # спустя полный интервал напоминания возобновляются
+    later = datetime.now(UTC) + timedelta(seconds=601)
+    assert await notifier.send_reminders(now=later) == 1
+
+
+# ---------- деградация канала по серии неудач ----------
+
+
+async def test_consecutive_failures_tracked(engine, session_factory, settings):
+    from app.core.bus import EventBus
+
+    settings.notify_retry_attempts = 1
+    settings.notify_retry_delay_s = 0.001
+
+    class FailingTransport:
+        def __init__(self):
+            self.fail = True
+
+        async def __call__(self, method, payload):
+            if self.fail:
+                raise TimeoutError()
+            return {"ok": True, "result": {"message_id": 1}}
+
+    transport = FailingTransport()
+    notifier = TelegramNotifier(session_factory, settings, EventBus(), transport=transport)
+    async with session_factory() as session:
+        session.add(NotificationRecipient(name="Д", chat_id="1", enabled=True))
+        await session.commit()
+
+    from tests.test_notifier import make_event
+
+    for i in range(5):
+        await notifier.deliver(make_event(incident_id=i + 1))
+    assert notifier.stats.consecutive_failures == 5
+    # тип исключения виден в ошибке (пустой str(TimeoutError) был неотличим)
+    assert "TimeoutError" in notifier.stats.last_error
+
+    transport.fail = False
+    await notifier.deliver(make_event(incident_id=99))
+    assert notifier.stats.consecutive_failures == 0

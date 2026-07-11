@@ -96,6 +96,7 @@ async def set_thresholds(
         hysteresis=body.hysteresis,
         warn_delay_s=body.warn_delay_s,
         crit_delay_s=body.crit_delay_s,
+        stability_budget_h=body.stability_budget_h,
         created_by=body.created_by,
     )
     session.add(profile)

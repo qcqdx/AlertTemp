@@ -40,8 +40,17 @@ async def healthz(
         payload["notifier"] = {
             "sent": notifier.stats.sent,
             "failed": notifier.stats.failed,
+            "consecutive_failures": notifier.stats.consecutive_failures,
             "last_error": notifier.stats.last_error,
         }
+        # серия подряд неудачных доставок = канал фактически не работает,
+        # даже если конфиг валиден (живой прецедент: прокси перестал
+        # пропускать CONNECT в рантайме)
+        from app.core.config import get_settings
+
+        if notifier.stats.consecutive_failures >= get_settings().notify_degraded_after:
+            payload["notifier"]["degraded"] = True
+            payload["status"] = "degraded"
     notifier_error = getattr(request.app.state, "notifier_error", None)
     if notifier_error:
         # канал оповещений не запустился (ошибка конфигурации);

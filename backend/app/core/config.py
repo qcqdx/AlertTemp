@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     # напоминаниями (0 = выключить) и период проверки
     notify_reminder_interval_s: int = 600
     notify_reminder_check_s: float = 30.0
+    # канал считается деградировавшим после N подряд неудачных доставок
+    notify_degraded_after: int = 5
 
     # --- auth ---
     # пароль первичного администратора (логин admin); используется один раз,
@@ -52,6 +54,11 @@ class Settings(BaseSettings):
     admin_password: str | None = None
     # включить при работе через reverse-proxy с TLS
     session_cookie_secure: bool = False
+
+    # --- quality (MKT) ---
+    # ΔH/R для среднекинетической температуры, Кельвины
+    # (ΔH ≈ 83.144 кДж/моль — фармакопейный стандарт)
+    mkt_delta_h_over_r: float = 10000.0
 
     # --- display ---
     display_timezone: str = "Europe/Moscow"

@@ -125,6 +125,8 @@ class ThresholdSet(BaseModel):
     hysteresis: float = Field(default=0.3, ge=0.0, le=5.0)
     warn_delay_s: int = Field(default=300, ge=0, le=86400)
     crit_delay_s: int = Field(default=0, ge=0, le=86400)
+    # суммарно допустимое время вне диапазона для хранимых препаратов, часы
+    stability_budget_h: float | None = Field(default=None, gt=0, le=100000)
     created_by: str | None = Field(default=None, max_length=200)
 
     @model_validator(mode="after")
@@ -154,6 +156,7 @@ class ThresholdOut(BaseModel):
     hysteresis: float
     warn_delay_s: int
     crit_delay_s: int
+    stability_budget_h: float | None
     created_at: datetime
     created_by: str | None
 
@@ -173,6 +176,7 @@ class IncidentOut(BaseModel):
     opened_at: datetime
     closed_at: datetime | None
     open_value: float | None
+    confirm_value: float | None
     peak_value: float | None
     threshold_profile_id: int | None
     acknowledged_by: str | None

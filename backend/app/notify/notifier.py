@@ -67,6 +67,7 @@ def normalize_proxy_url(url: str) -> tuple[str, bool]:
 class NotifierStats:
     sent: int = 0
     failed: int = 0
+    consecutive_failures: int = 0
     last_error: str | None = None
     extra: dict = field(default_factory=dict)
 
@@ -133,6 +134,32 @@ def format_message(event: IncidentEvent, tz: ZoneInfo) -> str:
     return "\n".join(lines)
 
 
+DIGEST_MAX_LINES = 20
+
+
+def format_reminder_digest(
+    items: list[tuple[Incident, str, str]], tz: ZoneInfo, now: datetime
+) -> str:
+    """Сводка по нескольким неподтверждённым инцидентам одним сообщением.
+
+    Групповой сбой (роутер/брокер площадки = десятки offline-инцидентов)
+    не должен превращаться в шторм: на целевом масштабе 30 холодильников
+    поштучные напоминания дали бы сотни сообщений в час — дежурные такой
+    канал просто отключат.
+    """
+    lines = [f"⏰ <b>НЕ ПОДТВЕРЖДЕНЫ: {len(items)} инцидентов</b>"]
+    for incident, alias, controller_name in items[:DIGEST_MAX_LINES]:
+        key = (str(incident.type), str(incident.severity))
+        emoji = _EMOJI.get(key, "🚨")
+        duration = format_duration(now - incident.opened_at)
+        peak = f", пик {incident.peak_value} °C" if incident.peak_value is not None else ""
+        lines.append(f"{emoji} {controller_name}, {alias} — {duration}{peak}")
+    if len(items) > DIGEST_MAX_LINES:
+        lines.append(f"…и ещё {len(items) - DIGEST_MAX_LINES}")
+    lines.append("Подтвердите инциденты в ColdWatch, чтобы остановить напоминания.")
+    return "\n".join(lines)
+
+
 def format_reminder(
     incident: Incident,
     controller_name: str,
@@ -173,6 +200,7 @@ class TelegramNotifier:
         self._queue: asyncio.Queue | None = None
         self._task: asyncio.Task | None = None
         self._reminder_task: asyncio.Task | None = None
+        self._started_at: datetime | None = None
         self._stopping = False
         self._tz = ZoneInfo(settings.display_timezone)
         # (incident_id, chat_id) -> message_id открывшего сообщения
@@ -183,6 +211,10 @@ class TelegramNotifier:
 
     async def start(self) -> None:
         self._stopping = False
+        # grace-период: после старта (апгрейд/рестарт) напоминания
+        # возобновляются не раньше, чем через полный интервал — иначе
+        # N старых неподтверждённых дают N немедленных сообщений
+        self._started_at = datetime.now(UTC)
         if self._transport is None:
             self._transport = await self._make_http_transport()
         self._queue = self._bus.subscribe()
@@ -230,8 +262,11 @@ class TelegramNotifier:
         if interval <= 0:
             return 0
         now = now or datetime.now(UTC)
+        # grace: после рестарта первое напоминание — не раньше полного
+        # интервала от старта процесса
+        if self._started_at is not None and (now - self._started_at).total_seconds() < interval:
+            return 0
         cutoff = now - timedelta(seconds=interval)
-        sent = 0
 
         async with self._session_factory() as session:
             rows = await session.execute(
@@ -242,39 +277,51 @@ class TelegramNotifier:
                     Incident.status == IncidentStatus.OPEN,
                     Incident.opened_at <= cutoff,
                 )
+                .order_by(Incident.opened_at)
             )
             due = [
                 (incident, alias, controller_name)
                 for incident, alias, controller_name in rows.all()
                 if incident.last_reminder_at is None or incident.last_reminder_at <= cutoff
             ]
+            if not due:
+                return 0
             recipients = await session.execute(
                 select(NotificationRecipient).where(NotificationRecipient.enabled.is_(True))
             )
             chat_ids = [r.chat_id for r in recipients.scalars()]
+            if not chat_ids:
+                return 0
 
-            for incident, alias, controller_name in due:
-                if not chat_ids:
-                    break
+            # групповые сбои схлопываются в одну сводку на чат
+            if len(due) == 1:
+                incident, alias, controller_name = due[0]
                 text = format_reminder(incident, controller_name, alias, self._tz, now)
-                delivered = False
-                for chat_id in chat_ids:
-                    try:
-                        await self._send_with_retry(
-                            {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
-                        )
-                        self.stats.sent += 1
-                        delivered = True
-                    except Exception as exc:
-                        self.stats.failed += 1
-                        self.stats.last_error = str(exc)[:500]
-                        logger.error("Reminder to chat %s failed: %s", chat_id, exc)
-                if delivered:
-                    incident.last_reminder_at = now
-                    incident.reminder_count += 1
-                    sent += 1
+            else:
+                text = format_reminder_digest(due, self._tz, now)
+
+            delivered = False
+            for chat_id in chat_ids:
+                try:
+                    await self._send_with_retry(
+                        {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+                    )
+                    self.stats.sent += 1
+                    self.stats.consecutive_failures = 0
+                    delivered = True
+                except Exception as exc:
+                    self.stats.failed += 1
+                    self.stats.consecutive_failures += 1
+                    self.stats.last_error = str(exc)[:500]
+                    logger.error("Reminder to chat %s failed: %s", chat_id, exc)
+
+            if not delivered:
+                return 0
+            for incident, _, _ in due:
+                incident.last_reminder_at = now
+                incident.reminder_count += 1
             await session.commit()
-        return sent
+        return len(due)
 
     async def _make_http_transport(self) -> Transport:
         import aiohttp
@@ -337,9 +384,11 @@ class TelegramNotifier:
             try:
                 await self._deliver_one(event, recipient.chat_id, text)
                 self.stats.sent += 1
+                self.stats.consecutive_failures = 0
             except Exception as exc:
                 # один недоступный получатель не блокирует остальных
                 self.stats.failed += 1
+                self.stats.consecutive_failures += 1
                 self.stats.last_error = str(exc)[:500]
                 logger.error("Failed to notify chat %s: %s", recipient.chat_id, exc)
 
@@ -381,7 +430,10 @@ class TelegramNotifier:
                 last_error = exc
             if attempt < self._settings.notify_retry_attempts:
                 await asyncio.sleep(self._settings.notify_retry_delay_s * attempt)
-        raise NotifyError(f"delivery failed after retries: {last_error}")
+        raise NotifyError(
+            "delivery failed after retries: "
+            f"{type(last_error).__name__}: {last_error or '<no message>'}"
+        )
 
     async def send_test(self, text: str = "ColdWatch: тестовое оповещение ✅") -> dict:
         """Кнопка «отправить тестовое» в настройках."""

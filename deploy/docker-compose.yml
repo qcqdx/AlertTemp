@@ -36,15 +36,15 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # ВСЕ переменные COLDWATCH_* из .env доходят до приложения целиком —
+    # явный список был источником P4 (настройка есть в config.py, но не
+    # проброшена в контейнер). environment ниже — только вычисляемые значения
+    # и дефолты; они имеют приоритет над env_file.
+    env_file:
+      - .env
     environment:
       COLDWATCH_DATABASE_URL: postgresql+asyncpg://coldwatch:${COLDWATCH_DB_PASSWORD}@db:5432/coldwatch
       COLDWATCH_MQTT_HOST: ${COLDWATCH_MQTT_HOST:-mqtt}
-      COLDWATCH_MQTT_PORT: ${COLDWATCH_MQTT_PORT:-1883}
-      COLDWATCH_MQTT_TOPIC_FILTER: ${COLDWATCH_MQTT_TOPIC_FILTER:-#}
-      COLDWATCH_TELEGRAM_BOT_TOKEN: ${COLDWATCH_TELEGRAM_BOT_TOKEN:-}
-      COLDWATCH_TELEGRAM_PROXY: ${COLDWATCH_TELEGRAM_PROXY:-}
-      COLDWATCH_DISPLAY_TIMEZONE: ${COLDWATCH_DISPLAY_TIMEZONE:-Europe/Moscow}
-      COLDWATCH_ADMIN_PASSWORD: ${COLDWATCH_ADMIN_PASSWORD:-}
     ports:
       # API доступен только с хоста: наружу — через reverse-proxy с TLS
       # (аутентификация в приложении появляется в фазе 2)
