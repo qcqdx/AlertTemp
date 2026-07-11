@@ -2,9 +2,10 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_ingest_service
+from app.api.deps import get_ingest_service, get_notifier
 from app.core.db import get_session
 from app.ingest.service import IngestService
+from app.notify.notifier import TelegramNotifier
 
 router = APIRouter(tags=["health"])
 
@@ -13,6 +14,7 @@ router = APIRouter(tags=["health"])
 async def healthz(
     session: AsyncSession = Depends(get_session),
     ingest: IngestService | None = Depends(get_ingest_service),
+    notifier: TelegramNotifier | None = Depends(get_notifier),
 ) -> dict:
     database_ok = True
     try:
@@ -33,4 +35,10 @@ async def healthz(
         }
         if not ingest.stats.mqtt_connected:
             payload["status"] = "degraded"
+    if notifier is not None:
+        payload["notifier"] = {
+            "sent": notifier.stats.sent,
+            "failed": notifier.stats.failed,
+            "last_error": notifier.stats.last_error,
+        }
     return payload

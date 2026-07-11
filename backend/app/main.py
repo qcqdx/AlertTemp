@@ -9,6 +9,7 @@ from app.api.routes import (
     health,
     incidents,
     measurements,
+    notify,
     sensors,
     thresholds,
 )
@@ -17,6 +18,7 @@ from app.core.config import Settings, get_settings
 from app.core.db import dispose_engine, init_engine, session_factory
 from app.ingest.mqtt import MqttIngest
 from app.ingest.service import IngestService
+from app.notify.notifier import TelegramNotifier
 from app.rules.engine import RuleEngine
 
 logging.basicConfig(
@@ -41,6 +43,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await rule_engine.start()
             app.state.rule_engine = rule_engine
 
+        notifier = None
+        if settings.telegram_bot_token:
+            notifier = TelegramNotifier(session_factory(), settings, bus)
+            await notifier.start()
+            app.state.notifier = notifier
+
         mqtt = None
         if settings.mqtt_enabled:
             mqtt = MqttIngest(settings, ingest_service)
@@ -51,6 +59,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             if mqtt is not None:
                 await mqtt.stop()
+            if notifier is not None:
+                await notifier.stop()
             if rule_engine is not None:
                 await rule_engine.stop()
             await ingest_service.stop()
@@ -64,6 +74,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(measurements.router)
     app.include_router(thresholds.router)
     app.include_router(incidents.router)
+    app.include_router(notify.router)
     return app
 
 

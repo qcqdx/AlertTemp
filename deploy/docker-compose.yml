@@ -39,6 +39,9 @@ services:
       COLDWATCH_MQTT_HOST: ${COLDWATCH_MQTT_HOST:-mqtt}
       COLDWATCH_MQTT_PORT: ${COLDWATCH_MQTT_PORT:-1883}
       COLDWATCH_MQTT_TOPIC_FILTER: ${COLDWATCH_MQTT_TOPIC_FILTER:-#}
+      COLDWATCH_TELEGRAM_BOT_TOKEN: ${COLDWATCH_TELEGRAM_BOT_TOKEN:-}
+      COLDWATCH_TELEGRAM_PROXY: ${COLDWATCH_TELEGRAM_PROXY:-}
+      COLDWATCH_DISPLAY_TIMEZONE: ${COLDWATCH_DISPLAY_TIMEZONE:-Europe/Moscow}
     ports:
       # API доступен только с хоста: наружу — через reverse-proxy с TLS
       # (аутентификация в приложении появляется в фазе 2)

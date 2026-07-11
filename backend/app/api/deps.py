@@ -5,6 +5,7 @@ from fastapi import Request
 from app.ingest.service import IngestService
 
 if TYPE_CHECKING:
+    from app.notify.notifier import TelegramNotifier
     from app.rules.engine import RuleEngine
 
 
@@ -14,3 +15,7 @@ def get_ingest_service(request: Request) -> IngestService | None:
 
 def get_rule_engine(request: Request) -> "RuleEngine | None":
     return getattr(request.app.state, "rule_engine", None)
+
+
+def get_notifier(request: Request) -> "TelegramNotifier | None":
+    return getattr(request.app.state, "notifier", None)

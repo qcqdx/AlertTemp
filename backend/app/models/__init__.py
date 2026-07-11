@@ -16,6 +16,7 @@ from app.models.devices import (
 )
 from app.models.discovery import DiscoveredTopic, DiscoveredTopicStatus
 from app.models.measurement import Measurement
+from app.models.notify import NotificationRecipient
 
 __all__ = [
     "SENSORS_PER_CONTROLLER",
@@ -29,6 +30,7 @@ __all__ = [
     "IncidentStatus",
     "IncidentType",
     "Measurement",
+    "NotificationRecipient",
     "Sensor",
     "SensorRuntimeState",
     "SensorStatus",

@@ -34,6 +34,14 @@ class Settings(BaseSettings):
     rules_enabled: bool = True
     offline_check_interval_s: float = 5.0
 
+    # --- notifications ---
+    telegram_bot_token: str | None = None
+    # SOCKS5-прокси для api.telegram.org (например socks5://user:pass@host:1080);
+    # обязателен на площадках, где прямой доступ к Telegram блокируется
+    telegram_proxy: str | None = None
+    notify_retry_attempts: int = 3
+    notify_retry_delay_s: float = 2.0
+
     # --- display ---
     display_timezone: str = "Europe/Moscow"
 

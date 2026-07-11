@@ -183,3 +183,26 @@ class IncidentOut(BaseModel):
 class IncidentAck(BaseModel):
     acknowledged_by: str = Field(min_length=1, max_length=200)
     note: str | None = None
+
+
+# ---------- notifications ----------
+
+
+class RecipientCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    chat_id: str = Field(min_length=1, max_length=64)
+    enabled: bool = True
+
+
+class RecipientUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    enabled: bool | None = None
+
+
+class RecipientOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    chat_id: str
+    enabled: bool
