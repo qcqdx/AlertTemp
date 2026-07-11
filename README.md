@@ -47,6 +47,9 @@ python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 Локальный стек с брокером и БД: `docker compose -f deploy/docker-compose.yml up db mqtt`,
 затем `uvicorn app.main:app --reload` c `COLDWATCH_DATABASE_URL` из `.env`.
 
+Frontend (dev): `cd frontend && npm install && npm run dev` — vite на :5173
+проксирует API в backend на :8000.
+
 Эмулятор контроллеров (реалистичные данные + сценарии аварий):
 
 ```bash
@@ -56,9 +59,14 @@ backend/.venv/bin/python devtools/controller_sim.py --scenario overheat:1/2 --sc
 
 ## Статус
 
-Идёт фаза 1 (см. [план](docs/CONCEPT.md#12-план-реализации)): сбор данных,
-обнаружение датчиков, управление устройствами, API измерений. Детекция
-инцидентов, оповещения и web-интерфейс — фазы 2–3.
+Фазы 1–2 готовы (см. [план](docs/CONCEPT.md#12-план-реализации)): сбор данных,
+обнаружение и управление устройствами, rule engine (пороги с гистерезисом и
+задержками, offline-детекция), инциденты с подтверждением, Telegram-оповещения
+(включая SOCKS5), аутентификация с ролями (admin/operator/viewer) и
+web-интерфейс (дашборд, графики, журнал инцидентов, администрирование).
 
-⚠️ Аутентификация появляется в фазе 2: пока API должен быть доступен только
-из доверенной сети (в docker-compose порт открыт только на localhost).
+Вход: логин `admin`, пароль из `COLDWATCH_ADMIN_PASSWORD` (или сгенерированный
+в логе контейнера при первом старте: `docker compose logs app | grep password`).
+
+Дальше по плану (фаза 3): эскалация оповещений, бюджет стабильности и MKT,
+отчёты PDF/Excel, журнал аудита.

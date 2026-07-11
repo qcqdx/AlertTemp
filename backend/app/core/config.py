@@ -51,6 +51,8 @@ class Settings(BaseSettings):
 
     # --- display ---
     display_timezone: str = "Europe/Moscow"
+    # каталог собранного web-интерфейса (frontend/dist)
+    static_dir: str = "static"
 
 
 @lru_cache

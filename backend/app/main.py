@@ -1,7 +1,10 @@
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import (
     auth_routes,
@@ -81,6 +84,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(thresholds.router)
     app.include_router(incidents.router)
     app.include_router(notify.router)
+
+    # собранный web-интерфейс (frontend/dist), если лежит рядом
+    static_dir = Path(settings.static_dir)
+    if (static_dir / "index.html").is_file():
+        app.mount(
+            "/assets", StaticFiles(directory=static_dir / "assets"), name="assets"
+        )
+
+        @app.get("/{path:path}", include_in_schema=False)
+        async def spa(path: str) -> FileResponse:
+            # API-маршруты зарегистрированы раньше и матчятся первыми;
+            # всё остальное — SPA с client-side роутингом
+            candidate = static_dir / path
+            if path and ".." not in path and candidate.is_file():
+                return FileResponse(candidate)
+            return FileResponse(static_dir / "index.html")
+
     return app
 
 

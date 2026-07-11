@@ -29,7 +29,9 @@ services:
       - mqtt-data:/mosquitto/data
 
   app:
-    build: ../backend
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
     restart: unless-stopped
     depends_on:
       db:
@@ -42,6 +44,7 @@ services:
       COLDWATCH_TELEGRAM_BOT_TOKEN: ${COLDWATCH_TELEGRAM_BOT_TOKEN:-}
       COLDWATCH_TELEGRAM_PROXY: ${COLDWATCH_TELEGRAM_PROXY:-}
       COLDWATCH_DISPLAY_TIMEZONE: ${COLDWATCH_DISPLAY_TIMEZONE:-Europe/Moscow}
+      COLDWATCH_ADMIN_PASSWORD: ${COLDWATCH_ADMIN_PASSWORD:-}
     ports:
       # API доступен только с хоста: наружу — через reverse-proxy с TLS
       # (аутентификация в приложении появляется в фазе 2)
