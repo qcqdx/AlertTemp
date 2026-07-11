@@ -34,7 +34,7 @@ async def test_sensor_binding_flow(client, ingest):
         "/api/v1/sensors",
         json={
             "controller_id": controller["id"],
-            "hardware_uid": "28ff6a01/temp",
+            "mqtt_topic": "28ff6a01/temp",
             "alias": "Верхняя полка",
             "position": 1,
         },
@@ -62,7 +62,7 @@ async def test_max_three_sensors_per_controller(client):
             "/api/v1/sensors",
             json={
                 "controller_id": controller["id"],
-                "hardware_uid": f"uid-{position}",
+                "mqtt_topic": f"uid-{position}",
                 "alias": f"Датчик {position}",
                 "position": position,
             },
@@ -73,7 +73,7 @@ async def test_max_three_sensors_per_controller(client):
         "/api/v1/sensors",
         json={
             "controller_id": controller["id"],
-            "hardware_uid": "uid-4",
+            "mqtt_topic": "uid-4",
             "alias": "Лишний",
             "position": 1,
         },
@@ -85,12 +85,12 @@ async def test_position_conflict(client):
     controller = await create_controller(client)
     body = {
         "controller_id": controller["id"],
-        "hardware_uid": "uid-a",
+        "mqtt_topic": "uid-a",
         "alias": "А",
         "position": 2,
     }
     assert (await client.post("/api/v1/sensors", json=body)).status_code == 201
-    body["hardware_uid"] = "uid-b"
+    body["mqtt_topic"] = "uid-b"
     response = await client.post("/api/v1/sensors", json=body)
     assert response.status_code == 409
 
@@ -99,7 +99,7 @@ async def test_duplicate_uid_rejected_until_archived(client):
     controller = await create_controller(client)
     body = {
         "controller_id": controller["id"],
-        "hardware_uid": "uid-x",
+        "mqtt_topic": "uid-x",
         "alias": "X",
         "position": 1,
     }
@@ -121,7 +121,7 @@ async def test_archive_controller_archives_sensors(client):
         "/api/v1/sensors",
         json={
             "controller_id": controller["id"],
-            "hardware_uid": "uid-z",
+            "mqtt_topic": "uid-z",
             "alias": "Z",
             "position": 1,
         },
@@ -155,3 +155,51 @@ async def test_healthz(client):
     body = response.json()
     assert body["database"] is True
     assert "ingest" in body
+
+
+async def test_patch_mqtt_topic_fixes_typo(client, ingest):
+    """Опечатка в топике при вводе исправляется через PATCH, без archive+create."""
+    controller = await create_controller(client)
+    response = await client.post(
+        "/api/v1/sensors",
+        json={
+            "controller_id": controller["id"],
+            "mqtt_topic": "temp/28ff6a01-TYPO",
+            "alias": "Полка",
+            "position": 1,
+        },
+    )
+    sensor_id = response.json()["id"]
+
+    # правильный топик уже виден в очереди обнаружения
+    await ingest.handle_message("temp/28ff6a01", b"4.0")
+    await ingest.flush()
+
+    response = await client.patch(
+        f"/api/v1/sensors/{sensor_id}", json={"mqtt_topic": "temp/28ff6a01"}
+    )
+    assert response.status_code == 200
+    assert response.json()["mqtt_topic"] == "temp/28ff6a01"
+
+    # обнаруженный топик помечен привязанным, данные пишутся в датчик
+    assert (await client.get("/api/v1/discovery")).json() == []
+    await ingest.handle_message("temp/28ff6a01", b"4.1")
+    await ingest.flush()
+    points = (await client.get(f"/api/v1/sensors/{sensor_id}/measurements")).json()
+    assert [p["value"] for p in points] == [4.1]
+
+
+async def test_patch_mqtt_topic_conflict(client):
+    controller = await create_controller(client)
+    for position, topic in ((1, "temp/aaa"), (2, "temp/bbb")):
+        await client.post(
+            "/api/v1/sensors",
+            json={
+                "controller_id": controller["id"],
+                "mqtt_topic": topic,
+                "alias": f"Датчик {position}",
+                "position": position,
+            },
+        )
+    response = await client.patch("/api/v1/sensors/2", json={"mqtt_topic": "temp/aaa"})
+    assert response.status_code == 409

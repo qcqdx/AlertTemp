@@ -62,7 +62,15 @@ async def main() -> None:
         default=[],
         help="overheat:C[/S] | offline:C[/S] | fault:C/S | door:C (можно повторять)",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="фиксирует топики и шум: перезапуск эмулятора сохраняет те же id датчиков",
+    )
     args = parser.parse_args()
+    if args.seed is not None:
+        random.seed(args.seed)
 
     args.overheat, args.offline, args.fault, args.door = set(), set(), set(), set()
     for scenario in args.scenario:

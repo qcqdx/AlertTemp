@@ -9,7 +9,7 @@ async def seed(session_factory, values: list[tuple[datetime, float]]) -> int:
         session.add(controller)
         await session.flush()
         sensor = Sensor(
-            controller_id=controller.id, hardware_uid="uid-1", alias="Полка", position=1
+            controller_id=controller.id, mqtt_topic="uid-1", alias="Полка", position=1
         )
         session.add(sensor)
         await session.flush()

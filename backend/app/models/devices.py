@@ -54,8 +54,8 @@ class Sensor(TimestampMixin, Base):
         # id датчика уникален среди неархивных: после архивирования тот же
         # физический датчик можно привязать заново (например, к другому контроллеру)
         Index(
-            "uq_sensor_hardware_uid_active",
-            "hardware_uid",
+            "uq_sensor_mqtt_topic_active",
+            "mqtt_topic",
             unique=True,
             postgresql_where=text("status != 'archived'"),
             sqlite_where=text("status != 'archived'"),
@@ -66,8 +66,9 @@ class Sensor(TimestampMixin, Base):
     controller_id: Mapped[int] = mapped_column(
         ForeignKey("controller.id", ondelete="RESTRICT"), nullable=False, index=True
     )
-    # id датчика, который транслирует железо (MQTT-топик); задан извне, неизменяем
-    hardware_uid: Mapped[str] = mapped_column(String(500), nullable=False)
+    # полный MQTT-топик, в который публикует железо (например temp/<uid DS18B20>);
+    # задан прошивкой; правка разрешена только для исправления опечаток при вводе
+    mqtt_topic: Mapped[str] = mapped_column(String(500), nullable=False)
     # обязательный человекочитаемый псевдоним: во всех экранах и оповещениях — он
     alias: Mapped[str] = mapped_column(String(200), nullable=False)
     position: Mapped[int | None] = mapped_column(Integer)

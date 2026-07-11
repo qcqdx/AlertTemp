@@ -10,7 +10,7 @@ from app.models.base import Base
 class DiscoveredTopicStatus(enum.StrEnum):
     NEW = "new"  # виден в эфире, ни к чему не привязан — ждёт решения администратора
     IGNORED = "ignored"  # администратор пометил как чужой/мусорный трафик
-    BOUND = "bound"  # привязан к датчику (создан Sensor с этим hardware_uid)
+    BOUND = "bound"  # привязан к датчику (создан Sensor с этим mqtt_topic)
 
 
 class DiscoveredTopic(Base):

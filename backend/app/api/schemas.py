@@ -9,13 +9,15 @@ from app.models import ControllerStatus, DiscoveredTopicStatus, SensorStatus
 
 class SensorCreate(BaseModel):
     controller_id: int
-    hardware_uid: str = Field(min_length=1, max_length=500)
+    mqtt_topic: str = Field(min_length=1, max_length=500)
     alias: str = Field(min_length=1, max_length=200)
     position: int = Field(ge=1, le=3)
     heartbeat_timeout_s: int = Field(default=120, ge=10, le=86400)
 
 
 class SensorUpdate(BaseModel):
+    # правка топика — для исправления опечаток при вводе в эксплуатацию
+    mqtt_topic: str | None = Field(default=None, min_length=1, max_length=500)
     alias: str | None = Field(default=None, min_length=1, max_length=200)
     position: int | None = Field(default=None, ge=1, le=3)
     heartbeat_timeout_s: int | None = Field(default=None, ge=10, le=86400)
@@ -27,7 +29,7 @@ class SensorOut(BaseModel):
 
     id: int
     controller_id: int
-    hardware_uid: str
+    mqtt_topic: str
     alias: str
     position: int | None
     heartbeat_timeout_s: int

@@ -57,7 +57,7 @@ async def create_sensor(
 
     duplicate = await session.execute(
         select(Sensor.id).where(
-            Sensor.hardware_uid == body.hardware_uid, Sensor.status != SensorStatus.ARCHIVED
+            Sensor.mqtt_topic == body.mqtt_topic, Sensor.status != SensorStatus.ARCHIVED
         )
     )
     if duplicate.first() is not None:
@@ -65,7 +65,7 @@ async def create_sensor(
 
     sensor = Sensor(
         controller_id=body.controller_id,
-        hardware_uid=body.hardware_uid,
+        mqtt_topic=body.mqtt_topic,
         alias=body.alias,
         position=body.position,
         heartbeat_timeout_s=body.heartbeat_timeout_s,
@@ -73,7 +73,7 @@ async def create_sensor(
     session.add(sensor)
 
     discovered = await session.execute(
-        select(DiscoveredTopic).where(DiscoveredTopic.topic == body.hardware_uid)
+        select(DiscoveredTopic).where(DiscoveredTopic.topic == body.mqtt_topic)
     )
     discovered_row = discovered.scalar_one_or_none()
     if discovered_row is not None:
@@ -105,6 +105,26 @@ async def update_sensor(
         siblings = await _active_sensors(session, sensor.controller_id)
         if any(s.id != sensor.id and s.position == new_position for s in siblings):
             raise HTTPException(status_code=409, detail="Position already taken on this controller")
+
+    new_topic = updates.get("mqtt_topic")
+    if new_topic is not None and new_topic != sensor.mqtt_topic:
+        duplicate = await session.execute(
+            select(Sensor.id).where(
+                Sensor.mqtt_topic == new_topic,
+                Sensor.status != SensorStatus.ARCHIVED,
+                Sensor.id != sensor.id,
+            )
+        )
+        if duplicate.first() is not None:
+            raise HTTPException(status_code=409, detail="Sensor id is already bound")
+        # новый топик помечаем привязанным; старый снова всплывёт в очереди
+        # обнаружения, как только с него придут сообщения
+        discovered = await session.execute(
+            select(DiscoveredTopic).where(DiscoveredTopic.topic == new_topic)
+        )
+        discovered_row = discovered.scalar_one_or_none()
+        if discovered_row is not None:
+            discovered_row.status = DiscoveredTopicStatus.BOUND
 
     for attr, value in updates.items():
         setattr(sensor, attr, value)

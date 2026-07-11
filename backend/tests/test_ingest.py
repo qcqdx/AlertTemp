@@ -21,7 +21,7 @@ async def make_sensor(session_factory, topic="ctrl1/s1", status=SensorStatus.ACT
         await session.flush()
         sensor = Sensor(
             controller_id=controller.id,
-            hardware_uid=topic,
+            mqtt_topic=topic,
             alias="Верхняя полка",
             position=1,
             status=status,

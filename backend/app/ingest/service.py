@@ -119,7 +119,7 @@ class IngestService:
             # archived: топик считается «ничьим» и снова виден в обнаружении
             row = await session.execute(
                 select(Sensor.id).where(
-                    Sensor.hardware_uid == topic, Sensor.status != SensorStatus.ARCHIVED
+                    Sensor.mqtt_topic == topic, Sensor.status != SensorStatus.ARCHIVED
                 )
             )
             result = row.first()
@@ -246,7 +246,7 @@ class IngestService:
             if existing.status == DiscoveredTopicStatus.BOUND:
                 bound_sensor = await session.execute(
                     select(Sensor.id).where(
-                        Sensor.hardware_uid == topic, Sensor.status != SensorStatus.ARCHIVED
+                        Sensor.mqtt_topic == topic, Sensor.status != SensorStatus.ARCHIVED
                     )
                 )
                 if bound_sensor.first() is None:
