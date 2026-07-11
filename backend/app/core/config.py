@@ -42,6 +42,13 @@ class Settings(BaseSettings):
     notify_retry_attempts: int = 3
     notify_retry_delay_s: float = 2.0
 
+    # --- auth ---
+    # пароль первичного администратора (логин admin); используется один раз,
+    # при пустой таблице пользователей. Не задан — пароль генерируется в лог.
+    admin_password: str | None = None
+    # включить при работе через reverse-proxy с TLS
+    session_cookie_secure: bool = False
+
     # --- display ---
     display_timezone: str = "Europe/Moscow"
 

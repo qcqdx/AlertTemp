@@ -2,13 +2,18 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.auth import require_admin, require_viewer
 from app.api.deps import get_rule_engine
 from app.api.schemas import ThresholdOut, ThresholdSet
 from app.core.db import get_session
 from app.models import Sensor, SensorStatus, ThresholdProfile
 from app.rules.engine import RuleEngine
 
-router = APIRouter(prefix="/api/v1/sensors/{sensor_id}/thresholds", tags=["thresholds"])
+router = APIRouter(
+    prefix="/api/v1/sensors/{sensor_id}/thresholds",
+    tags=["thresholds"],
+    dependencies=[Depends(require_viewer)],
+)
 
 
 async def _get_sensor(session: AsyncSession, sensor_id: int) -> Sensor:
@@ -48,7 +53,7 @@ async def threshold_history(
     return list(rows.scalars().all())
 
 
-@router.put("", response_model=ThresholdOut)
+@router.put("", response_model=ThresholdOut, dependencies=[Depends(require_admin)])
 async def set_thresholds(
     sensor_id: int,
     body: ThresholdSet,

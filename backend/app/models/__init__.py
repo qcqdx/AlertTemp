@@ -17,6 +17,7 @@ from app.models.devices import (
 from app.models.discovery import DiscoveredTopic, DiscoveredTopicStatus
 from app.models.measurement import Measurement
 from app.models.notify import NotificationRecipient
+from app.models.users import User, UserRole, UserSession
 
 __all__ = [
     "SENSORS_PER_CONTROLLER",
@@ -35,4 +36,7 @@ __all__ = [
     "SensorRuntimeState",
     "SensorStatus",
     "ThresholdProfile",
+    "User",
+    "UserRole",
+    "UserSession",
 ]

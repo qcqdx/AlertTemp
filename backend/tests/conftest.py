@@ -48,12 +48,47 @@ def ingest(session_factory, settings, bus) -> IngestService:
     return IngestService(session_factory, settings, bus)
 
 
-@pytest.fixture
-async def client(engine, settings, ingest):
+async def make_user(session_factory, username, password, role):
+    from app.core.security import hash_password
+    from app.models.users import User
+
+    async with session_factory() as session:
+        session.add(
+            User(
+                username=username,
+                password_hash=hash_password(password),
+                full_name=username,
+                role=role,
+            )
+        )
+        await session.commit()
+
+
+def build_app(settings, ingest):
     app = create_app(settings)
     # обходим lifespan (он инициализирует свой движок и MQTT) — в тестах
     # окружение собирается фикстурами
     app.state.ingest_service = ingest
+    return app
+
+
+async def login_client(app, username, password):
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client
+    client = AsyncClient(transport=transport, base_url="http://test")
+    response = await client.post(
+        "/api/v1/auth/login", json={"username": username, "password": password}
+    )
+    assert response.status_code == 200, response.text
+    return client
+
+
+@pytest.fixture
+async def client(engine, settings, ingest, session_factory):
+    """Клиент, аутентифицированный администратором."""
+    from app.models.users import UserRole
+
+    await make_user(session_factory, "admin", "admin-pass-123", UserRole.ADMIN)
+    app = build_app(settings, ingest)
+    client = await login_client(app, "admin", "admin-pass-123")
+    yield client
+    await client.aclose()

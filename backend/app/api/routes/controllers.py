@@ -3,11 +3,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.api.auth import require_admin, require_viewer
 from app.api.schemas import ControllerCreate, ControllerOut, ControllerUpdate
 from app.core.db import get_session
 from app.models import Controller, ControllerStatus, Sensor, SensorStatus
 
-router = APIRouter(prefix="/api/v1/controllers", tags=["controllers"])
+router = APIRouter(
+    prefix="/api/v1/controllers",
+    tags=["controllers"],
+    dependencies=[Depends(require_viewer)],
+)
 
 
 async def _get_controller(session: AsyncSession, controller_id: int) -> Controller:
@@ -34,7 +39,9 @@ async def list_controllers(
     return list(result.scalars().all())
 
 
-@router.post("", response_model=ControllerOut, status_code=201)
+@router.post(
+    "", response_model=ControllerOut, status_code=201, dependencies=[Depends(require_admin)]
+)
 async def create_controller(
     body: ControllerCreate, session: AsyncSession = Depends(get_session)
 ) -> Controller:
@@ -51,7 +58,9 @@ async def get_controller(
     return await _get_controller(session, controller_id)
 
 
-@router.patch("/{controller_id}", response_model=ControllerOut)
+@router.patch(
+    "/{controller_id}", response_model=ControllerOut, dependencies=[Depends(require_admin)]
+)
 async def update_controller(
     controller_id: int,
     body: ControllerUpdate,
@@ -64,7 +73,11 @@ async def update_controller(
     return await _get_controller(session, controller_id)
 
 
-@router.post("/{controller_id}/archive", response_model=ControllerOut)
+@router.post(
+    "/{controller_id}/archive",
+    response_model=ControllerOut,
+    dependencies=[Depends(require_admin)],
+)
 async def archive_controller(
     controller_id: int, session: AsyncSession = Depends(get_session)
 ) -> Controller:

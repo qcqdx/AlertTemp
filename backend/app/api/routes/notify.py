@@ -2,13 +2,16 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.auth import require_admin
 from app.api.deps import get_notifier
 from app.api.schemas import RecipientCreate, RecipientOut, RecipientUpdate
 from app.core.db import get_session
 from app.models.notify import NotificationRecipient
 from app.notify.notifier import TelegramNotifier
 
-router = APIRouter(prefix="/api/v1/notify", tags=["notifications"])
+router = APIRouter(
+    prefix="/api/v1/notify", tags=["notifications"], dependencies=[Depends(require_admin)]
+)
 
 
 @router.get("/recipients", response_model=list[RecipientOut])

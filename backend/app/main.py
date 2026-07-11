@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api.routes import (
+    auth_routes,
     controllers,
     discovery,
     health,
@@ -12,7 +13,9 @@ from app.api.routes import (
     notify,
     sensors,
     thresholds,
+    users,
 )
+from app.core.bootstrap import ensure_admin
 from app.core.bus import bus
 from app.core.config import Settings, get_settings
 from app.core.db import dispose_engine, init_engine, session_factory
@@ -32,6 +35,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         init_engine(settings.database_url)
+        await ensure_admin(session_factory(), settings)
 
         ingest_service = IngestService(session_factory(), settings, bus)
         await ingest_service.start()
@@ -68,6 +72,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="ColdWatch", version="0.1.0", lifespan=lifespan)
     app.include_router(health.router)
+    app.include_router(auth_routes.router)
+    app.include_router(users.router)
     app.include_router(controllers.router)
     app.include_router(sensors.router)
     app.include_router(discovery.router)

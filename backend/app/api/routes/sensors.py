@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.auth import require_admin
 from app.api.deps import get_ingest_service, get_rule_engine
 from app.api.schemas import SensorCreate, SensorOut, SensorUpdate
 from app.core.db import get_session
@@ -17,7 +18,9 @@ from app.models import (
 )
 from app.rules.engine import RuleEngine
 
-router = APIRouter(prefix="/api/v1/sensors", tags=["sensors"])
+router = APIRouter(
+    prefix="/api/v1/sensors", tags=["sensors"], dependencies=[Depends(require_admin)]
+)
 
 
 async def _get_sensor(session: AsyncSession, sensor_id: int) -> Sensor:

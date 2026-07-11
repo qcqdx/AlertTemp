@@ -4,11 +4,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.auth import require_operator, require_viewer
 from app.api.schemas import IncidentAck, IncidentOut
 from app.core.db import get_session
 from app.models import Incident, IncidentStatus, IncidentType
 
-router = APIRouter(prefix="/api/v1/incidents", tags=["incidents"])
+router = APIRouter(
+    prefix="/api/v1/incidents", tags=["incidents"], dependencies=[Depends(require_viewer)]
+)
 
 
 @router.get("", response_model=list[IncidentOut])
@@ -51,7 +54,9 @@ async def open_incidents(session: AsyncSession = Depends(get_session)) -> list[I
     return list(result.scalars().all())
 
 
-@router.post("/{incident_id}/ack", response_model=IncidentOut)
+@router.post(
+    "/{incident_id}/ack", response_model=IncidentOut, dependencies=[Depends(require_operator)]
+)
 async def acknowledge_incident(
     incident_id: int,
     body: IncidentAck,
@@ -76,7 +81,9 @@ async def acknowledge_incident(
     return incident
 
 
-@router.post("/{incident_id}/note", response_model=IncidentOut)
+@router.post(
+    "/{incident_id}/note", response_model=IncidentOut, dependencies=[Depends(require_operator)]
+)
 async def add_note(
     incident_id: int,
     body: IncidentAck,

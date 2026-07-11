@@ -5,11 +5,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import BigInteger, cast, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.auth import require_viewer
 from app.api.schemas import MeasurementBucket, MeasurementPoint, SensorLatest
 from app.core.db import get_session
 from app.models import Controller, Measurement, Sensor
 
-router = APIRouter(prefix="/api/v1", tags=["measurements"])
+router = APIRouter(
+    prefix="/api/v1", tags=["measurements"], dependencies=[Depends(require_viewer)]
+)
 
 MAX_RAW_POINTS = 20_000
 BUCKET_SECONDS: dict[str, int] = {"1m": 60, "10m": 600, "1h": 3600, "1d": 86400}
