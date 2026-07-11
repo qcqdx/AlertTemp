@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import BigInteger, cast, func, select
+from sqlalchemy import BigInteger, cast, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import MeasurementBucket, MeasurementPoint, SensorLatest
@@ -14,12 +14,58 @@ router = APIRouter(prefix="/api/v1", tags=["measurements"])
 MAX_RAW_POINTS = 20_000
 BUCKET_SECONDS: dict[str, int] = {"1m": 60, "10m": 600, "1h": 3600, "1d": 86400}
 
+# наличие continuous aggregate проверяется один раз на процесс
+_cagg_available: bool | None = None
+
 
 def _epoch(session: AsyncSession, column):
     """Секунды unix-эпохи для timestamptz-колонки, переносимо между PG и SQLite."""
     if session.get_bind().dialect.name == "postgresql":
         return cast(func.extract("epoch", column), BigInteger)
     return cast(func.strftime("%s", column), BigInteger)
+
+
+async def _use_cagg(session: AsyncSession) -> bool:
+    global _cagg_available
+    if session.get_bind().dialect.name != "postgresql":
+        return False
+    if _cagg_available is None:
+        row = await session.execute(text("SELECT to_regclass('measurement_1m')"))
+        _cagg_available = row.scalar() is not None
+    return _cagg_available
+
+
+async def _buckets_from_cagg(
+    session: AsyncSession, sensor_id: int, start: datetime, end: datetime, step: int
+) -> list[MeasurementBucket]:
+    """Агрегация поверх минутного continuous aggregate: при реальном темпе
+    ~1 Гц на датчик графики за длинные периоды не должны сканировать сырые
+    данные. Хвост последней минуты отстаёт на refresh-лаг агрегата (~1 мин)."""
+    rows = await session.execute(
+        text(
+            """
+            SELECT (extract(epoch FROM bucket)::bigint / :step) * :step AS b,
+                   sum(sum_value)    AS sum_value,
+                   min(min_value)    AS min_value,
+                   max(max_value)    AS max_value,
+                   sum(sample_count) AS sample_count
+            FROM measurement_1m
+            WHERE sensor_id = :sensor_id AND bucket >= :start AND bucket <= :end
+            GROUP BY b ORDER BY b
+            """
+        ),
+        {"sensor_id": sensor_id, "start": start, "end": end, "step": step},
+    )
+    return [
+        MeasurementBucket(
+            time=datetime.fromtimestamp(int(row.b), tz=UTC),
+            avg=round(row.sum_value / row.sample_count, 3),
+            min=row.min_value,
+            max=row.max_value,
+            count=row.sample_count,
+        )
+        for row in rows
+    ]
 
 
 @router.get("/sensors/{sensor_id}/measurements")
@@ -57,6 +103,9 @@ async def sensor_measurements(
         return [MeasurementPoint(time=row.time, value=row.value) for row in result]
 
     step = BUCKET_SECONDS[bucket]
+    if await _use_cagg(session):
+        return await _buckets_from_cagg(session, sensor_id, start, end, step)
+
     bucket_expr = cast(_epoch(session, Measurement.time) / step, BigInteger) * step
     result = await session.execute(
         select(

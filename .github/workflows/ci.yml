@@ -71,6 +71,16 @@ jobs:
                       "WHERE hypertable_name = 'measurement'"
                   ))
                   assert result.scalar() == 1, "measurement is not a hypertable"
+                  result = await conn.execute(text(
+                      "SELECT count(*) FROM timescaledb_information.continuous_aggregates "
+                      "WHERE view_name = 'measurement_1m'"
+                  ))
+                  assert result.scalar() == 1, "measurement_1m aggregate missing"
+                  result = await conn.execute(text(
+                      "SELECT count(*) FROM timescaledb_information.jobs "
+                      "WHERE proc_name IN ('policy_retention', 'policy_compression')"
+                  ))
+                  assert result.scalar() >= 3, "retention/compression policies missing"
               await engine.dispose()
               print("hypertable ok")
 
