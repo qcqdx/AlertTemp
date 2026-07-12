@@ -123,3 +123,23 @@ tr:hover td { background: rgba(255, 255, 255, 0.02); }
   .page { padding: 0.7rem; }
   .chart { height: 320px; }
 }
+
+/* ---------- печатная форма ---------- */
+.report { background: #fff; color: #111; padding: 1.5rem; border-radius: 8px; }
+.report h1 { font-size: 1.4rem; }
+.report h2 { color: #111; border-bottom: 1px solid #999; padding-bottom: 0.2rem; }
+.report h3 { font-size: 0.95rem; margin: 0.9rem 0 0.3rem; color: #333; }
+.report table { border: 1px solid #bbb; margin-bottom: 0.6rem; }
+.report th, .report td { border: 1px solid #ccc; color: #111; padding: 0.3rem 0.5rem; }
+.report th { background: #f0f0f0; color: #333; text-transform: none; }
+.report .hint { color: #555; }
+.report-head td:first-child { width: 10rem; color: #555; }
+.report-sign { margin-top: 2rem; color: #111; }
+
+@media print {
+  .topbar, .no-print { display: none !important; }
+  body { background: #fff; }
+  .page { padding: 0; max-width: none; }
+  .report { border-radius: 0; padding: 0; }
+  .report-sensor { break-inside: avoid; }
+}

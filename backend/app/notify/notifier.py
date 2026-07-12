@@ -22,7 +22,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.bus import EventBus, IncidentEvent
 from app.core.config import Settings
-from app.models import Controller, Incident, IncidentStatus, IncidentType, Sensor
+from app.models import (
+    Controller,
+    Incident,
+    IncidentMessage,
+    IncidentStatus,
+    IncidentType,
+    Sensor,
+)
 from app.models.audit import record_audit
 from app.models.notify import NotificationRecipient
 
@@ -380,6 +387,14 @@ class TelegramNotifier:
                         payload["reply_markup"] = markup
                 else:
                     payload["text"] = format_reminder_digest(items, self._tz, now)
+                    digest_markup = self._digest_markup(
+                        [
+                            (incident.id, f"{controller_name}, {alias}")
+                            for incident, alias, controller_name in items
+                        ]
+                    )
+                    if digest_markup is not None:
+                        payload["reply_markup"] = digest_markup
                 try:
                     await self._send_with_retry(payload)
                     self.stats.sent += 1
@@ -540,17 +555,27 @@ class TelegramNotifier:
         if not recipients:
             return
         text = format_event_digest(events, self._tz)
+        # кнопки подтверждения по открытым/эскалированным инцидентам сводки
+        markup = self._digest_markup(
+            [
+                (e.incident_id, f"{e.controller_name}, {e.sensor_alias}")
+                for e in events
+                if e.kind in ("opened", "escalated")
+            ]
+        )
         # в сводке reply-цепочки не ведутся; закрытые в сводке инциденты
         # освобождают сохранённые message_id
         for event in events:
             if event.kind == "resolved":
                 for recipient in recipients:
                     self._thread_ids.pop((event.incident_id, recipient.chat_id), None)
+                await self._drop_threads_db(event.incident_id)
         for recipient in recipients:
+            payload = {"chat_id": recipient.chat_id, "text": text, "parse_mode": "HTML"}
+            if markup is not None:
+                payload["reply_markup"] = markup
             try:
-                await self._send_with_retry(
-                    {"chat_id": recipient.chat_id, "text": text, "parse_mode": "HTML"}
-                )
+                await self._send_with_retry(payload)
                 self.stats.sent += 1
                 self.stats.consecutive_failures = 0
             except Exception as exc:
@@ -576,6 +601,37 @@ class TelegramNotifier:
                 [{"text": "✅ Подтвердить", "callback_data": f"ack:{incident_id}"}]
             ]
         }
+
+    async def _pop_thread_db(self, incident_id: int, chat_id: str) -> int | None:
+        async with self._session_factory() as session:
+            row = await session.get(IncidentMessage, (incident_id, chat_id))
+            if row is None:
+                return None
+            message_id = row.message_id
+            await session.delete(row)
+            await session.commit()
+            return message_id
+
+    async def _drop_threads_db(self, incident_id: int) -> None:
+        from sqlalchemy import delete
+
+        async with self._session_factory() as session:
+            await session.execute(
+                delete(IncidentMessage).where(IncidentMessage.incident_id == incident_id)
+            )
+            await session.commit()
+
+    def _digest_markup(self, items: list[tuple[int, str]]) -> dict | None:
+        """Кнопки подтверждения на сводке: по строке на инцидент (до 10) —
+        при групповом сбое дежурному есть чем подтверждать из чата
+        (находка стенда 3.7)."""
+        if not self._settings.notify_telegram_ack_buttons or not items:
+            return None
+        rows = [
+            [{"text": f"✅ {label}"[:60], "callback_data": f"ack:{incident_id}"}]
+            for incident_id, label in items[:10]
+        ]
+        return {"inline_keyboard": rows}
 
     async def _incident_tier(self, incident_id: int) -> int:
         async with self._session_factory() as session:
@@ -609,6 +665,8 @@ class TelegramNotifier:
         payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
         if event.kind == "resolved":
             reply_to = self._thread_ids.pop(thread_key, None)
+            if reply_to is None:
+                reply_to = await self._pop_thread_db(event.incident_id, chat_id)
             if reply_to is not None:
                 payload["reply_to_message_id"] = reply_to
         else:
@@ -630,6 +688,19 @@ class TelegramNotifier:
             message_id = data.get("result", {}).get("message_id")
             if message_id is not None:
                 self._thread_ids[thread_key] = message_id
+                # и в БД: reply-цепочка должна переживать рестарт
+                async with self._session_factory() as session:
+                    session.add(
+                        IncidentMessage(
+                            incident_id=event.incident_id,
+                            chat_id=chat_id,
+                            message_id=message_id,
+                        )
+                    )
+                    try:
+                        await session.commit()
+                    except Exception:
+                        await session.rollback()  # дубль при повторной доставке
 
     async def _send_with_retry(self, payload: dict) -> dict:
         assert self._transport is not None
@@ -693,6 +764,9 @@ class TelegramNotifier:
             except Exception as exc:
                 logger.warning("answerCallbackQuery failed: %s", exc)
 
+        logger.info(
+            "Telegram callback received: %r from %s (chat %s)", data, who, chat_id
+        )
         if not data.startswith("ack:"):
             return await answer("Неизвестная команда")
 
@@ -722,6 +796,7 @@ class TelegramNotifier:
                 incident_id,
             )
             await session.commit()
+        logger.info("Incident %s acknowledged via Telegram by %s", incident_id, who)
         await answer("Подтверждено ✅ Напоминания остановлены.")
 
     # ---------- ежедневный «система жива»-дайджест ----------

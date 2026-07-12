@@ -47,6 +47,9 @@ async def seed_quality_data(session_factory, with_budget=True):
                 warn_low=2.0,
                 warn_high=8.0,
                 stability_budget_h=8.0 if with_budget else None,
+                # профиль действует с начала данных: historical-расчёты
+                # (отчёт) считают нарушения только с момента активации порогов
+                created_at=now - timedelta(hours=13),
             )
         )
         # 12 часов данных: минутные точки; первые 4 часа — перегрев 10°C
@@ -151,3 +154,47 @@ async def test_open_and_confirm_values_distinct(session_factory, settings):
     assert incident.open_value == 8.06
     assert incident.confirm_value == 9.44
     assert incident.peak_value == 9.44
+
+
+# ---------- печатная форма (эскиз, приёмка стенда — после среза №2) ----------
+
+
+async def test_report_endpoint(client, session_factory):
+    """Отчёт: historical-семантика, эпохи профилей, слепые зоны, шапка."""
+    controller_id, sensor_id = await seed_quality_data(session_factory)
+
+    # '+00:00' в query превращается в пробел — используем Z-суффикс
+    start = (datetime.now(UTC) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    response = await client.get(
+        f"/api/v1/controllers/{controller_id}/report?start={start}"
+    )
+    assert response.status_code == 200
+    report = response.json()
+
+    assert report["basis"] == "historical"
+    assert report["generated_by"] == "admin"
+    assert "не означает" in report["metric_note"]
+
+    sensor = report["sensors"][0]
+    assert sensor["sensor_id"] == sensor_id
+    # эпоха профиля с границами действия
+    assert sensor["profiles"][0]["warn_high"] == 8.0
+    # 4 часа перегрева по действовавшему профилю
+    assert sensor["out_above_s"] == 4 * 3600
+    # слепые зоны: данных 12 ч из 24 — разрывы указаны явно
+    assert sensor["gaps"], "ожидались слепые зоны"
+    total_gap = sum(g["duration_s"] for g in sensor["gaps"])
+    assert total_gap > 11 * 3600  # ~12 часов без данных
+
+    assert sensor["mkt"] is not None
+
+
+async def test_report_validation(client, session_factory):
+    controller_id, _ = await seed_quality_data(session_factory)
+    now = datetime.now(UTC)
+    # период больше лимита
+    response = await client.get(
+        f"/api/v1/controllers/{controller_id}/report"
+        f"?start={(now - timedelta(days=200)).strftime('%Y-%m-%dT%H:%M:%SZ')}"
+    )
+    assert response.status_code == 422

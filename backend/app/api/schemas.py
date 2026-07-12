@@ -182,6 +182,8 @@ class IncidentOut(BaseModel):
     acknowledged_by: str | None
     acknowledged_at: datetime | None
     resolution_note: str | None
+    # до какого круга получателей дошла эскалация
+    escalated_tier: int
 
 
 class IncidentAck(BaseModel):

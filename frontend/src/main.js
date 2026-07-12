@@ -9,6 +9,7 @@ import DashboardView from './views/DashboardView.vue'
 import ControllerView from './views/ControllerView.vue'
 import IncidentsView from './views/IncidentsView.vue'
 import AdminView from './views/AdminView.vue'
+import ReportView from './views/ReportView.vue'
 
 const router = createRouter({
   history: createWebHashHistory(),
@@ -16,6 +17,7 @@ const router = createRouter({
     { path: '/login', component: LoginView },
     { path: '/', component: DashboardView },
     { path: '/controllers/:id', component: ControllerView, props: true },
+    { path: '/controllers/:id/report', component: ReportView, props: true },
     { path: '/incidents', component: IncidentsView },
     { path: '/admin', component: AdminView, meta: { admin: true } },
   ],

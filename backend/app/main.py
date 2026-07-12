@@ -16,6 +16,7 @@ from app.api.routes import (
     measurements,
     notify,
     quality,
+    reports,
     sensors,
     thresholds,
     users,
@@ -101,6 +102,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(notify.router)
     app.include_router(audit.router)
     app.include_router(quality.router)
+    app.include_router(reports.router)
 
     # собранный web-интерфейс (frontend/dist), если лежит рядом
     static_dir = Path(settings.static_dir)

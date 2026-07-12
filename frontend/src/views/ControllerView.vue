@@ -159,6 +159,9 @@ watch(qualityWindow, loadQuality)
     <h1>
       {{ controller.name }}
       <span class="hint" v-if="controller.location">· {{ controller.location }}</span>
+      <router-link :to="`/controllers/${props.id}/report`" style="font-size: 0.85rem; margin-left: 0.8rem">
+        🖨 Печатная форма
+      </router-link>
     </h1>
     <p v-if="error" class="error">{{ error }}</p>
 

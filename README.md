@@ -5,7 +5,8 @@
 и поддержка решения «можно ли применять препарат».
 
 Полная переработка проекта AlertTemp — концепция и архитектура описаны в
-[docs/CONCEPT.md](docs/CONCEPT.md). Прежний код сохранён в [legacy/](legacy/)
+[docs/CONCEPT.md](docs/CONCEPT.md), оставшиеся этапы и каталог паттернов —
+в [docs/ROADMAP.md](docs/ROADMAP.md). Прежний код сохранён в [legacy/](legacy/)
 как справочный материал по взаимодействию с железом.
 
 ## Как это устроено
@@ -56,6 +57,14 @@ Frontend (dev): `cd frontend && npm install && npm run dev` — vite на :5173
 backend/.venv/bin/python devtools/controller_sim.py --host localhost --controllers 2
 backend/.venv/bin/python devtools/controller_sim.py --scenario overheat:1/2 --scenario door:1
 ```
+
+## Развёртывание: Telegram
+
+Боту нужен ВЫДЕЛЕННЫЙ токен: getUpdates (ack-кнопки) конфликтует с любым
+другим потребителем того же токена (409 Conflict). В группах бот должен быть
+администратором группы (или участникам разрешена отправка) — иначе доставка
+молча не происходит; клиентские надписи о правах могут отставать, проверяйте
+фактом отправки («Отправить тестовое» в админке).
 
 ## Статус
 

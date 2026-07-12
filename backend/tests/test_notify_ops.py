@@ -254,3 +254,98 @@ async def test_heartbeat_compose_and_send(notifier_kit, session_factory):
     await notifier.send_heartbeat(now)
     # дайджест — только кругу 1
     assert [p["chat_id"] for p in transport.sent()] == ["111"]
+
+
+# ---------- находки 3.7 ----------
+
+
+async def test_reply_thread_survives_restart(notifier_kit, session_factory, settings):
+    """Находка 2: message_id открытия персистится — закрытие после рестарта
+    приходит reply-цепочкой, а не отдельным сообщением."""
+    notifier, transport = notifier_kit
+    await add_recipient(session_factory, "111")
+    incident_id = await seed_incident(session_factory)
+
+    await notifier.deliver(make_event(incident_id=incident_id, kind="opened"))
+    opened_message_id = transport.calls[-1][1]  # message_id из стаба
+
+    # «рестарт»: новый экземпляр notifier с пустой памятью
+    transport2 = MethodStubTransport()
+    notifier2 = TelegramNotifier(
+        session_factory, settings, EventBus(), transport=transport2
+    )
+    await notifier2.deliver(
+        make_event(incident_id=incident_id, kind="resolved", closed_at=datetime.now(UTC))
+    )
+    resolved_payload = transport2.sent()[0]
+    assert "reply_to_message_id" in resolved_payload
+
+    # запись удалена после использования
+    async with session_factory() as session:
+        from app.models import IncidentMessage
+
+        row = await session.get(IncidentMessage, (incident_id, "111"))
+    assert row is None
+    assert opened_message_id is not None
+
+
+async def test_event_digest_carries_ack_buttons(notifier_kit, session_factory):
+    """Находка 1: сводка событий несёт кнопки подтверждения по инцидентам."""
+    notifier, transport = notifier_kit
+    await add_recipient(session_factory, "111")
+
+    events = [make_event(incident_id=i, type="offline", value=None) for i in range(1, 16)]
+    events.append(
+        make_event(incident_id=99, kind="resolved", closed_at=datetime.now(UTC))
+    )
+    await notifier.deliver_batch(events)
+
+    payload = transport.sent()[0]
+    rows = payload["reply_markup"]["inline_keyboard"]
+    assert len(rows) == 10  # максимум 10 кнопок
+    assert rows[0][0]["callback_data"] == "ack:1"
+    # закрытый инцидент кнопки не получает
+    assert all(r[0]["callback_data"] != "ack:99" for r in rows)
+
+
+async def test_reminder_digest_carries_ack_buttons(notifier_kit, session_factory, settings):
+    settings.notify_reminder_interval_s = 600
+    notifier, transport = notifier_kit
+    await add_recipient(session_factory, "111")
+    await seed_many_incidents_local(session_factory, 3)
+
+    await notifier.send_reminders()
+    payload = transport.sent()[0]
+    assert "НЕ ПОДТВЕРЖДЕНЫ: 3" in payload["text"]
+    assert len(payload["reply_markup"]["inline_keyboard"]) == 3
+
+
+async def seed_many_incidents_local(session_factory, count):
+    async with session_factory() as session:
+        controller = Controller(name="Площадка")
+        session.add(controller)
+        await session.flush()
+        for i in range(count):
+            sensor = Sensor(
+                controller_id=controller.id, mqtt_topic=f"t/m{i}", alias=f"Д{i}", position=None
+            )
+            session.add(sensor)
+            await session.flush()
+            session.add(
+                Incident(
+                    sensor_id=sensor.id,
+                    controller_id=controller.id,
+                    type=IncidentType.OFFLINE,
+                    severity=IncidentSeverity.CRITICAL,
+                    status=IncidentStatus.OPEN,
+                    opened_at=datetime.now(UTC) - timedelta(seconds=1200),
+                )
+            )
+        await session.commit()
+
+
+async def test_escalated_tier_in_incident_api(client, session_factory):
+    """Находка 4: escalated_tier виден в API."""
+    await seed_incident(session_factory)
+    incidents = (await client.get("/api/v1/incidents")).json()
+    assert incidents[0]["escalated_tier"] == 1
