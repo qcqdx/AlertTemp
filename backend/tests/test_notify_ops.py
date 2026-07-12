@@ -1,5 +1,6 @@
 """Параллельный фронт фазы 4: ack-кнопка, эскалация кругами, heartbeat."""
 
+import logging
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -342,6 +343,44 @@ async def seed_many_incidents_local(session_factory, count):
                 )
             )
         await session.commit()
+
+
+# ---------- цикл I, §3: журналирование callback ----------
+
+
+async def test_callback_press_logs_receipt_and_ack(notifier_kit, session_factory, caplog):
+    """Обе INFO-строки: приём callback (receipt) и результат ack. Receipt
+    пишется ДО всех проверок — нажатие видно в журнале даже когда действие
+    отклонено."""
+    notifier, _ = notifier_kit
+    await add_recipient(session_factory, "111")
+    incident_id = await seed_incident(session_factory)
+
+    with caplog.at_level(logging.INFO, logger="app.notify.notifier"):
+        await notifier.handle_callback(make_callback(incident_id))
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("Telegram callback received" in m for m in messages), messages
+    assert any(
+        f"Incident {incident_id} acknowledged via Telegram" in m for m in messages
+    ), messages
+
+
+async def test_callback_receipt_logged_even_when_rejected(
+    notifier_kit, session_factory, caplog
+):
+    """Незарегистрированный чат: ack не происходит, но receipt-строка есть —
+    иначе отклонённые нажатия неотличимы от недоставленных."""
+    notifier, _ = notifier_kit
+    await add_recipient(session_factory, "111")
+    incident_id = await seed_incident(session_factory)
+
+    with caplog.at_level(logging.INFO, logger="app.notify.notifier"):
+        await notifier.handle_callback(make_callback(incident_id, chat_id="999"))
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("Telegram callback received" in m for m in messages), messages
+    assert not any("acknowledged via Telegram" in m for m in messages)
 
 
 async def test_escalated_tier_in_incident_api(client, session_factory):

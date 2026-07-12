@@ -3,7 +3,16 @@
 from datetime import UTC, datetime, timedelta
 
 from app.api.routes.quality import mean_kinetic_temperature
-from app.models import Controller, Measurement, Sensor, ThresholdProfile
+from app.models import (
+    Controller,
+    Incident,
+    IncidentSeverity,
+    IncidentStatus,
+    IncidentType,
+    Measurement,
+    Sensor,
+    ThresholdProfile,
+)
 
 # ---------- математика MKT ----------
 
@@ -198,3 +207,130 @@ async def test_report_validation(client, session_factory):
         f"?start={(now - timedelta(days=200)).strftime('%Y-%m-%dT%H:%M:%SZ')}"
     )
     assert response.status_code == 422
+
+
+# ---------- отчёт по экскурсии (цикл I, п.3) ----------
+
+
+async def seed_report_incident(
+    session_factory, controller_id, sensor_id, opened_ago_h=6.0, closed_ago_h=4.0
+):
+    """Инцидент внутри окна данных seed_quality_data; closed_ago_h=None — открыт."""
+    now = datetime.now(UTC)
+    opened_at = now - timedelta(hours=opened_ago_h)
+    closed_at = now - timedelta(hours=closed_ago_h) if closed_ago_h is not None else None
+    async with session_factory() as session:
+        incident = Incident(
+            sensor_id=sensor_id,
+            controller_id=controller_id,
+            type=IncidentType.OVERHEAT,
+            severity=IncidentSeverity.WARNING,
+            status=IncidentStatus.RESOLVED if closed_at else IncidentStatus.OPEN,
+            opened_at=opened_at,
+            closed_at=closed_at,
+            open_value=8.6,
+            peak_value=10.0,
+        )
+        session.add(incident)
+        await session.commit()
+        return incident.id, opened_at, closed_at
+
+
+def _dt(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+async def test_incident_report_period(client, session_factory):
+    """Период отчёта по экскурсии: [opened_at − 1 ч, closed_at + 1 ч]."""
+    controller_id, sensor_id = await seed_quality_data(session_factory)
+    incident_id, opened_at, closed_at = await seed_report_incident(
+        session_factory, controller_id, sensor_id
+    )
+
+    response = await client.get(f"/api/v1/incidents/{incident_id}/report")
+    assert response.status_code == 200
+    report = response.json()
+
+    assert report["controller_id"] == controller_id
+    assert _dt(report["period_start"]) == opened_at - timedelta(hours=1)
+    assert _dt(report["period_end"]) == closed_at + timedelta(hours=1)
+    assert report["basis"] == "historical"
+
+    # сам инцидент присутствует в форме
+    sensor = report["sensors"][0]
+    assert any(i["id"] == incident_id for i in sensor["incidents"])
+    assert sensor["samples"] > 0  # данные периода подтянуты
+
+
+async def test_incident_report_open_incident_ends_now(client, session_factory):
+    """Незакрытый инцидент: конец периода — текущий момент (не в будущем)."""
+    controller_id, sensor_id = await seed_quality_data(session_factory)
+    incident_id, opened_at, _ = await seed_report_incident(
+        session_factory, controller_id, sensor_id, opened_ago_h=2.0, closed_ago_h=None
+    )
+
+    report = (await client.get(f"/api/v1/incidents/{incident_id}/report")).json()
+    period_end = _dt(report["period_end"])
+    assert period_end <= datetime.now(UTC)
+    assert period_end > opened_at
+
+
+async def test_incident_report_not_found(client):
+    assert (await client.get("/api/v1/incidents/99999/report")).status_code == 404
+
+
+# ---------- CSV-выгрузки (цикл I, п.4) ----------
+
+
+async def test_report_csv_export(client, session_factory):
+    controller_id, _ = await seed_quality_data(session_factory)
+    start = (datetime.now(UTC) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    response = await client.get(
+        f"/api/v1/controllers/{controller_id}/report.csv?start={start}"
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert "attachment" in response.headers["content-disposition"]
+
+    text = response.text
+    assert text.startswith("﻿")  # BOM: Excel открывает UTF-8 сразу
+    lines = text.lstrip("﻿").splitlines()
+    assert lines[0].startswith("Объект;")
+    header = next(line for line in lines if line.startswith("Датчик;"))
+    assert "MKT" in header and "Слепых зон" in header
+    assert any(line.startswith("Полка;") for line in lines)
+
+
+async def test_incidents_journal_csv_export(client, session_factory):
+    controller_id, sensor_id = await seed_report_incident_pair(session_factory)
+
+    response = await client.get("/api/v1/incidents/export.csv")
+    assert response.status_code == 200
+    text = response.text
+    assert text.startswith("﻿")
+    lines = text.lstrip("﻿").splitlines()
+    assert lines[0].split(";")[:3] == ["id", "Холодильник", "Датчик"]
+    assert len(lines) == 3  # заголовок + 2 инцидента
+
+    # фильтры — те же, что у списка: закрытый отфильтровывается по status=open
+    filtered = (await client.get("/api/v1/incidents/export.csv?status=open")).text
+    filtered_lines = filtered.lstrip("﻿").splitlines()
+    assert len(filtered_lines) == 2
+    assert ";open;" in filtered_lines[1]
+
+    # фильтр по контроллеру
+    empty = (
+        await client.get(f"/api/v1/incidents/export.csv?controller_id={controller_id + 1}")
+    ).text
+    assert len(empty.lstrip("﻿").splitlines()) == 1  # только заголовок
+
+
+async def seed_report_incident_pair(session_factory):
+    """Контроллер + датчик + один закрытый и один открытый инцидент."""
+    controller_id, sensor_id = await seed_quality_data(session_factory)
+    await seed_report_incident(session_factory, controller_id, sensor_id)
+    await seed_report_incident(
+        session_factory, controller_id, sensor_id, opened_ago_h=2.0, closed_ago_h=None
+    )
+    return controller_id, sensor_id

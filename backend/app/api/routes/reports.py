@@ -10,9 +10,12 @@
   отсутствие данных не означает отсутствие нарушений.
 """
 
+import csv
+import io
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,8 +49,10 @@ METRIC_NOTE = (
     "Расчёт по минутным средним (агрегат measurement_1m); события короче "
     "минуты сглаживаются. «Вне диапазона» — по профилю порогов, "
     "действовавшему на момент измерения (basis=historical). "
-    "Слепые зоны перечислены явно: отсутствие данных не означает "
-    "отсутствие нарушений."
+    "Слепые зоны перечислены явно и квантованы по минутным бакетам: "
+    "границы разрыва округляются к целым минутам, поэтому длительность "
+    "может отличаться от секундной на величину до двух краевых минут. "
+    "Отсутствие данных не означает отсутствие нарушений."
 )
 
 
@@ -117,7 +122,13 @@ class ControllerReport(BaseModel):
 def find_gaps(
     bucket_times: list[datetime], start: datetime, end: datetime
 ) -> list[DataGap]:
-    """Слепые зоны: непрерывные интервалы без минутных данных длиннее порога."""
+    """Слепые зоны: непрерывные интервалы без минутных данных длиннее порога.
+
+    Вход сортируется здесь же: алгоритм требует возрастающего порядка, и
+    полагаться на ORDER BY вызывающего нельзя — неупорядоченная выборка
+    measurement_1m на PostgreSQL дала две «слепые зоны» длиной в весь период
+    (дефект стенда, цикл I)."""
+    bucket_times = sorted(bucket_times)
     gaps: list[DataGap] = []
 
     def add(gap_start: datetime, gap_end: datetime) -> None:
@@ -137,6 +148,19 @@ def find_gaps(
     return gaps
 
 
+def _normalize_period(start: datetime, end: datetime | None) -> tuple[datetime, datetime]:
+    end = end or datetime.now(UTC)
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=UTC)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=UTC)
+    if start >= end:
+        raise HTTPException(status_code=422, detail="start must be before end")
+    if end - start > timedelta(days=MAX_REPORT_DAYS):
+        raise HTTPException(status_code=422, detail=f"period exceeds {MAX_REPORT_DAYS} days")
+    return start, end
+
+
 @router.get("/controllers/{controller_id}/report", response_model=ControllerReport)
 async def controller_report(
     controller_id: int,
@@ -148,23 +172,93 @@ async def controller_report(
     controller = await session.get(Controller, controller_id)
     if controller is None:
         raise HTTPException(status_code=404, detail="Controller not found")
+    start, end = _normalize_period(start, end)
+    return await _build_report(session, controller, start, end, user.full_name)
 
-    end = end or datetime.now(UTC)
-    if start.tzinfo is None:
-        start = start.replace(tzinfo=UTC)
-    if end.tzinfo is None:
-        end = end.replace(tzinfo=UTC)
-    if start >= end:
-        raise HTTPException(status_code=422, detail="start must be before end")
-    if end - start > timedelta(days=MAX_REPORT_DAYS):
-        raise HTTPException(status_code=422, detail=f"period exceeds {MAX_REPORT_DAYS} days")
 
+@router.get("/incidents/{incident_id}/report", response_model=ControllerReport)
+async def incident_report(
+    incident_id: int,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+) -> ControllerReport:
+    """Отчёт по экскурсии: та же форма за период
+    [opened_at − 1 ч, closed_at + 1 ч] конкретного инцидента
+    (незакрытый — по текущий момент)."""
+    incident = await session.get(Incident, incident_id)
+    if incident is None:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    controller = await session.get(Controller, incident.controller_id)
+
+    now = datetime.now(UTC)
+    start = incident.opened_at - timedelta(hours=1)
+    end = min((incident.closed_at or now) + timedelta(hours=1), now)
+    return await _build_report(session, controller, start, end, user.full_name)
+
+
+def _csv_response(rows: list[list], filename: str) -> Response:
+    """CSV c BOM: Excel открывает UTF-8 без танцев с кодировкой."""
+    buffer = io.StringIO()
+    csv.writer(buffer, delimiter=";").writerows(rows)
+    return Response(
+        content="\ufeff" + buffer.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/controllers/{controller_id}/report.csv")
+async def controller_report_csv(
+    controller_id: int,
+    start: datetime,
+    end: datetime | None = None,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+) -> Response:
+    """Сводка отчёта по датчикам в CSV (для внутренних таблиц)."""
+    controller = await session.get(Controller, controller_id)
+    if controller is None:
+        raise HTTPException(status_code=404, detail="Controller not found")
+    start, end = _normalize_period(start, end)
+    report = await _build_report(session, controller, start, end, user.full_name)
+
+    rows: list[list] = [
+        ["Объект", report.controller_name, "Период",
+         report.period_start.isoformat(), report.period_end.isoformat(),
+         "Сформировал", report.generated_by, "basis", report.basis],
+        [],
+        ["Датчик", "Топик", "Измерений", "Покрытие", "Мин", "Средняя", "Макс",
+         "MKT", "Выше нормы, с", "Ниже нормы, с", "Всего вне, с",
+         "Слепых зон", "Слепые зоны, с", "Инцидентов"],
+    ]
+    for sensor in report.sensors:
+        rows.append([
+            sensor.alias, sensor.mqtt_topic, sensor.samples, sensor.coverage,
+            sensor.min, sensor.avg, sensor.max, sensor.mkt,
+            sensor.out_above_s, sensor.out_below_s, sensor.out_total_s,
+            len(sensor.gaps), sum(g.duration_s for g in sensor.gaps),
+            len(sensor.incidents),
+        ])
+    return _csv_response(
+        rows, f"coldwatch-report-{controller_id}-{start:%Y%m%d}-{end:%Y%m%d}.csv"
+    )
+
+
+async def _build_report(
+    session: AsyncSession,
+    controller: Controller,
+    start: datetime,
+    end: datetime,
+    generated_by: str,
+) -> ControllerReport:
     delta_h_over_r = get_settings().mkt_delta_h_over_r
     window_minutes = max(int((end - start).total_seconds() // 60), 1)
 
     sensors_rows = await session.execute(
         select(Sensor)
-        .where(Sensor.controller_id == controller_id, Sensor.status != SensorStatus.ARCHIVED)
+        .where(
+            Sensor.controller_id == controller.id, Sensor.status != SensorStatus.ARCHIVED
+        )
         .order_by(Sensor.position)
     )
 
@@ -261,13 +355,13 @@ async def controller_report(
         )
 
     return ControllerReport(
-        controller_id=controller_id,
+        controller_id=controller.id,
         controller_name=controller.name,
         location=controller.location,
         period_start=start,
         period_end=end,
         generated_at=datetime.now(UTC),
-        generated_by=user.full_name,
+        generated_by=generated_by,
         basis="historical",
         metric_note=METRIC_NOTE,
         sensors=report_sensors,

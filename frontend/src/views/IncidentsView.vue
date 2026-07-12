@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { api, auth } from '../api.js'
 
 const incidents = ref([])
@@ -16,13 +16,25 @@ function controllerName(id) {
   return controllers.value.find((c) => c.id === id)?.name || `#${id}`
 }
 
-async function refresh() {
-  const params = new URLSearchParams({ limit: '200' })
+function filterParams() {
+  const params = new URLSearchParams()
   if (filterStatus.value) params.set('status', filterStatus.value)
   if (filterType.value) params.set('type', filterType.value)
   if (filterController.value) params.set('controller_id', filterController.value)
+  return params
+}
+
+async function refresh() {
+  const params = filterParams()
+  params.set('limit', '200')
   incidents.value = await api.get(`/api/v1/incidents?${params}`)
 }
+
+// выгрузка журнала с теми же фильтрами, что на экране
+const csvUrl = computed(() => {
+  const qs = filterParams().toString()
+  return `/api/v1/incidents/export.csv${qs ? `?${qs}` : ''}`
+})
 
 async function ack(incident) {
   // кто подтвердил — сервер берёт из сессии
@@ -71,6 +83,7 @@ watch([filterStatus, filterType, filterController], refresh)
         <option value="">Все холодильники</option>
         <option v-for="c in controllers" :key="c.id" :value="c.id">{{ c.name }}</option>
       </select>
+      <a :href="csvUrl">⬇ CSV</a>
     </div>
     <div class="card" style="padding: 0; overflow-x: auto">
       <table>
@@ -103,7 +116,8 @@ watch([filterStatus, filterType, filterController], refresh)
             <td>{{ incident.peak_value ?? '—' }}</td>
             <td>{{ incident.acknowledged_by ?? '—' }}</td>
             <td>{{ incident.resolution_note ?? '' }}</td>
-            <td>
+            <td style="white-space: nowrap">
+              <router-link :to="`/incidents/${incident.id}/report`">Отчёт</router-link>
               <button v-if="auth.canOperate && incident.status === 'open'" @click="ack(incident)">
                 Подтвердить
               </button>

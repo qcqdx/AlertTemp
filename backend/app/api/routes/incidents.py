@@ -1,6 +1,9 @@
+import csv
+import io
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,6 +46,70 @@ async def list_incidents(
         query = query.where(Incident.opened_at <= opened_before)
     result = await session.execute(query)
     return list(result.scalars().all())
+
+
+@router.get("/export.csv")
+async def export_incidents_csv(
+    status: IncidentStatus | None = None,
+    type: IncidentType | None = None,
+    sensor_id: int | None = None,
+    controller_id: int | None = None,
+    opened_after: datetime | None = None,
+    opened_before: datetime | None = None,
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    """Журнал инцидентов в CSV с теми же фильтрами, что и список."""
+    from app.models import Controller, Sensor
+
+    query = (
+        select(Incident, Sensor.alias, Controller.name)
+        .join(Sensor, Sensor.id == Incident.sensor_id)
+        .join(Controller, Controller.id == Incident.controller_id)
+        .order_by(Incident.opened_at)
+    )
+    if status is not None:
+        query = query.where(Incident.status == status)
+    if type is not None:
+        query = query.where(Incident.type == type)
+    if sensor_id is not None:
+        query = query.where(Incident.sensor_id == sensor_id)
+    if controller_id is not None:
+        query = query.where(Incident.controller_id == controller_id)
+    if opened_after is not None:
+        query = query.where(Incident.opened_at >= opened_after)
+    if opened_before is not None:
+        query = query.where(Incident.opened_at <= opened_before)
+    result = await session.execute(query)
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, delimiter=";")
+    writer.writerow([
+        "id", "Холодильник", "Датчик", "Тип", "Критичность", "Статус",
+        "Начало", "Конец", "Длительность, с", "Значение начала",
+        "Значение фиксации", "Пик", "Подтвердил", "Подтверждён в",
+        "Круг эскалации", "Комментарий",
+    ])
+    for incident, alias, controller_name in result.all():
+        duration = (
+            int((incident.closed_at - incident.opened_at).total_seconds())
+            if incident.closed_at
+            else ""
+        )
+        writer.writerow([
+            incident.id, controller_name, alias, incident.type.value,
+            incident.severity.value, incident.status.value,
+            incident.opened_at.isoformat(),
+            incident.closed_at.isoformat() if incident.closed_at else "",
+            duration, incident.open_value, incident.confirm_value,
+            incident.peak_value, incident.acknowledged_by or "",
+            incident.acknowledged_at.isoformat() if incident.acknowledged_at else "",
+            incident.escalated_tier, incident.resolution_note or "",
+        ])
+    return Response(
+        content="\ufeff" + buffer.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="coldwatch-incidents.csv"'},
+    )
 
 
 @router.get("/open", response_model=list[IncidentOut])

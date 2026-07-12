@@ -1,8 +1,16 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { api } from '../api.js'
 
-const props = defineProps({ id: { type: String, required: true } })
+// Два режима одной формы:
+//  id         — температурный журнал холодильника за выбранный период;
+//  incidentId — отчёт по экскурсии: период задаёт сервер
+//               ([открытие − 1 ч, закрытие + 1 ч]).
+const props = defineProps({
+  id: { type: String, default: '' },
+  incidentId: { type: String, default: '' },
+})
+const isIncident = computed(() => !!props.incidentId)
 
 const report = ref(null)
 const error = ref('')
@@ -15,17 +23,29 @@ function toLocalInput(date) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
+function periodQuery() {
+  const start = new Date(startLocal.value).toISOString()
+  const end = new Date(endLocal.value).toISOString()
+  return `start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`
+}
+
 async function load() {
   error.value = ''
   try {
-    const start = new Date(startLocal.value).toISOString()
-    const end = new Date(endLocal.value).toISOString()
-    report.value = await api.get(
-      `/api/v1/controllers/${props.id}/report?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`
-    )
+    report.value = isIncident.value
+      ? await api.get(`/api/v1/incidents/${props.incidentId}/report`)
+      : await api.get(`/api/v1/controllers/${props.id}/report?${periodQuery()}`)
   } catch (e) {
     error.value = e.message
   }
+}
+
+const csvUrl = computed(() =>
+  isIncident.value ? null : `/api/v1/controllers/${props.id}/report.csv?${periodQuery()}`
+)
+
+function printPage() {
+  window.print()
 }
 
 function fmt(ts) {
@@ -47,18 +67,22 @@ onMounted(load)
 <template>
   <div class="page report-page">
     <div class="form-row no-print">
-      <label>Период с</label>
-      <input v-model="startLocal" type="datetime-local" />
-      <label>по</label>
-      <input v-model="endLocal" type="datetime-local" />
-      <button class="primary" @click="load">Сформировать</button>
-      <button @click="window.print ? window.print() : print()">🖨 Печать</button>
-      <router-link :to="`/controllers/${props.id}`">← к холодильнику</router-link>
+      <template v-if="!isIncident">
+        <label>Период с</label>
+        <input v-model="startLocal" type="datetime-local" />
+        <label>по</label>
+        <input v-model="endLocal" type="datetime-local" />
+        <button class="primary" @click="load">Сформировать</button>
+        <a :href="csvUrl">⬇ CSV</a>
+      </template>
+      <button @click="printPage">🖨 Печать</button>
+      <router-link v-if="isIncident" to="/incidents">← к журналу инцидентов</router-link>
+      <router-link v-else :to="`/controllers/${props.id}`">← к холодильнику</router-link>
     </div>
     <p v-if="error" class="error">{{ error }}</p>
 
     <div v-if="report" class="report">
-      <h1>Температурный журнал</h1>
+      <h1>{{ isIncident ? `Отчёт по экскурсии №${props.incidentId}` : 'Температурный журнал' }}</h1>
       <table class="report-head">
         <tbody>
           <tr><td>Объект</td><td><b>{{ report.controller_name }}</b>

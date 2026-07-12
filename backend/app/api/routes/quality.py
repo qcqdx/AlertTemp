@@ -90,6 +90,7 @@ async def _minute_buckets(
                        min_value, max_value, sample_count
                 FROM measurement_1m
                 WHERE sensor_id = :sensor_id AND bucket >= :start AND bucket <= :end
+                ORDER BY bucket
                 """
             ),
             {"sensor_id": sensor_id, "start": start, "end": end},
@@ -108,6 +109,7 @@ async def _minute_buckets(
             FROM measurement
             WHERE sensor_id = :sensor_id AND time >= :start AND time <= :end
             GROUP BY bucket_epoch
+            ORDER BY bucket_epoch
             """
         ),
         {"sensor_id": sensor_id, "start": start, "end": end},

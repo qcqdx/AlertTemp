@@ -19,6 +19,11 @@ const router = createRouter({
     { path: '/controllers/:id', component: ControllerView, props: true },
     { path: '/controllers/:id/report', component: ReportView, props: true },
     { path: '/incidents', component: IncidentsView },
+    {
+      path: '/incidents/:id/report',
+      component: ReportView,
+      props: (route) => ({ incidentId: route.params.id }),
+    },
     { path: '/admin', component: AdminView, meta: { admin: true } },
   ],
 })

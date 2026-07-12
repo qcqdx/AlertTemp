@@ -544,3 +544,45 @@ async def test_reorder_audit_records_before_and_after(client):
     entries = (await client.get("/api/v1/audit?entity_type=controller")).json()
     reorder = next(e for e in entries if e["action"] == "reorder")
     assert reorder["detail"] == f"{ids} -> {ids[::-1]}"
+
+
+# ---------- цикл I, §1: find_gaps не зависит от порядка выборки ----------
+
+
+def test_find_gaps_shuffled_input_yields_single_gap():
+    """Дефект стенда (цикл I): выборка measurement_1m на PostgreSQL пришла
+    без ORDER BY — неупорядоченный вход давал две фиктивные «слепые зоны»
+    длиной почти в весь период. Сценарий стенда: единственный разрыв 840 с
+    (18:32 → 18:46). Вход перемешан намеренно — find_gaps обязан сортировать
+    сам, не полагаясь на ORDER BY вызывающего (паттерн ROADMAP §2.14)."""
+    import random
+
+    from app.api.routes.reports import find_gaps
+
+    start = datetime(2026, 7, 11, 18, 0, tzinfo=UTC)
+    end = datetime(2026, 7, 11, 19, 0, tzinfo=UTC)
+    buckets = [
+        start + timedelta(minutes=minute)
+        for minute in range(60)
+        if not (32 <= minute < 46)
+    ]
+    random.Random(20260711).shuffle(buckets)
+
+    gaps = find_gaps(buckets, start, end)
+    assert len(gaps) == 1, f"ожидался один разрыв, получено: {gaps}"
+    assert gaps[0].start == start + timedelta(minutes=32)
+    assert gaps[0].end == start + timedelta(minutes=46)
+    assert gaps[0].duration_s == 840
+
+
+def test_find_gaps_reversed_input_no_phantom_full_period_gaps():
+    """Вырожденный порядок (строго убывающий) — худший случай старого дефекта:
+    каждая пара соседей выглядела «дырой». Непрерывные данные без разрывов
+    должны дать пустой список."""
+    from app.api.routes.reports import find_gaps
+
+    start = datetime(2026, 7, 11, 18, 0, tzinfo=UTC)
+    end = datetime(2026, 7, 11, 19, 0, tzinfo=UTC)
+    buckets = [start + timedelta(minutes=minute) for minute in range(60)]
+
+    assert find_gaps(list(reversed(buckets)), start, end) == []
