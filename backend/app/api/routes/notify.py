@@ -6,7 +6,7 @@ from app.api.auth import require_admin
 from app.api.deps import get_notifier
 from app.api.schemas import RecipientCreate, RecipientOut, RecipientUpdate
 from app.core.db import get_session
-from app.models.audit import record_audit
+from app.models.audit import format_detail, record_audit
 from app.models.notify import NotificationRecipient
 from app.models.users import User
 from app.notify.notifier import TelegramNotifier
@@ -58,7 +58,9 @@ async def update_recipient(
     updates = body.model_dump(exclude_unset=True)
     for attr, value in updates.items():
         setattr(recipient, attr, value)
-    record_audit(session, user.username, "update", "recipient", recipient_id, str(updates))
+    record_audit(
+        session, user.username, "update", "recipient", recipient_id, format_detail(updates)
+    )
     await session.commit()
     return recipient
 

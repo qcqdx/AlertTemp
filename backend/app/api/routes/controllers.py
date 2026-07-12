@@ -7,7 +7,7 @@ from app.api.auth import require_admin, require_viewer
 from app.api.schemas import ControllerCreate, ControllerOut, ControllerUpdate
 from app.core.db import get_session
 from app.models import Controller, ControllerStatus, Sensor, SensorStatus
-from app.models.audit import record_audit
+from app.models.audit import format_detail, record_audit
 from app.models.users import User
 
 router = APIRouter(
@@ -73,7 +73,9 @@ async def update_controller(
     updates = body.model_dump(exclude_unset=True)
     for attr, value in updates.items():
         setattr(controller, attr, value)
-    record_audit(session, user.username, "update", "controller", controller_id, str(updates))
+    record_audit(
+        session, user.username, "update", "controller", controller_id, format_detail(updates)
+    )
     await session.commit()
     return await _get_controller(session, controller_id)
 
@@ -98,6 +100,7 @@ async def reorder_sensors(
         )
 
     by_id = {s.id: s for s in active}
+    old_order = [s.id for s in sorted(active, key=lambda s: s.position or 0)]
     # освобождаем позиции перед назначением, иначе уникальный индекс
     # (controller_id, position) отвергнет промежуточное состояние
     for sensor in active:
@@ -105,8 +108,10 @@ async def reorder_sensors(
     await session.flush()
     for position, sensor_id in enumerate(order, start=1):
         by_id[sensor_id].position = position
+    # аудит как источник правды: фиксируем «было -> стало», не только итог
     record_audit(
-        session, user.username, "reorder", "controller", controller_id, str(order)
+        session, user.username, "reorder", "controller", controller_id,
+        f"{old_order} -> {list(order)}",
     )
     await session.commit()
     # сбрасываем identity map: коллекция sensors должна перечитаться

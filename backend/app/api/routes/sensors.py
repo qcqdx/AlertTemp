@@ -16,7 +16,7 @@ from app.models import (
     Sensor,
     SensorStatus,
 )
-from app.models.audit import record_audit
+from app.models.audit import format_detail, record_audit
 from app.models.users import User
 from app.rules.engine import RuleEngine
 
@@ -161,7 +161,7 @@ async def update_sensor(
 
     for attr, value in updates.items():
         setattr(sensor, attr, value)
-    record_audit(session, user.username, "update", "sensor", sensor_id, str(updates))
+    record_audit(session, user.username, "update", "sensor", sensor_id, format_detail(updates))
     await session.commit()
     if ingest is not None:
         ingest.invalidate_sensor_cache()

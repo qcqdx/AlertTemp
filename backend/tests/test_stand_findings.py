@@ -488,3 +488,59 @@ async def test_quality_basis_historical(client, session_factory):
     assert current["out_total_s"] == 0
     # по действовавшему тогда профилю (до 8) — все 120 минут вне диапазона
     assert historical["out_total_s"] == 120 * 60
+
+
+# ---------- отчёт фазы 3.6: микрозаметки аудита ----------
+
+
+async def test_audit_detail_has_no_enum_repr(client):
+    """Python-repr enum'ов не утекает в детали аудита."""
+    controller = (await client.post("/api/v1/controllers", json={"name": "Аудит-enum"})).json()
+    response = await client.post(
+        "/api/v1/sensors",
+        json={
+            "controller_id": controller["id"],
+            "mqtt_topic": "t/enum",
+            "alias": "П",
+            "position": 1,
+        },
+    )
+    sensor_id = response.json()["id"]
+    # смена статуса на paused: раньше в detail попадал <SensorStatus.PAUSED: 'paused'>
+    await client.patch(f"/api/v1/sensors/{sensor_id}", json={"status": "paused"})
+    # смена роли пользователя — тот же класс бага
+    user = (
+        await client.post(
+            "/api/v1/users",
+            json={"username": "en", "password": "x" * 8, "full_name": "Е", "role": "viewer"},
+        )
+    ).json()
+    await client.patch(f"/api/v1/users/{user['id']}", json={"role": "operator"})
+
+    entries = (await client.get("/api/v1/audit")).json()
+    details = " | ".join(e["detail"] or "" for e in entries)
+    assert "<SensorStatus" not in details and "<UserRole" not in details
+    assert "'status': 'paused'" in details
+    assert "'role': 'operator'" in details
+
+
+async def test_reorder_audit_records_before_and_after(client):
+    controller = (await client.post("/api/v1/controllers", json={"name": "Было-стало"})).json()
+    ids = []
+    for position in (1, 2):
+        response = await client.post(
+            "/api/v1/sensors",
+            json={
+                "controller_id": controller["id"],
+                "mqtt_topic": f"t/ba{position}",
+                "alias": f"Д{position}",
+                "position": position,
+            },
+        )
+        ids.append(response.json()["id"])
+
+    await client.put(f"/api/v1/controllers/{controller['id']}/sensor-order", json=ids[::-1])
+
+    entries = (await client.get("/api/v1/audit?entity_type=controller")).json()
+    reorder = next(e for e in entries if e["action"] == "reorder")
+    assert reorder["detail"] == f"{ids} -> {ids[::-1]}"

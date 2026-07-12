@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.auth import require_admin
 from app.core.db import get_session
 from app.core.security import drop_user_sessions, hash_password
-from app.models.audit import record_audit
+from app.models.audit import format_detail, record_audit
 from app.models.users import User, UserRole
 
 router = APIRouter(
@@ -62,7 +62,8 @@ async def create_user(
     session.add(user)
     await session.flush()
     record_audit(
-        session, admin.username, "create", "user", user.id, f"{body.username} ({body.role})"
+        session, admin.username, "create", "user", user.id,
+        f"{body.username} ({body.role.value})",
     )
     await session.commit()
     return user
@@ -96,6 +97,8 @@ async def update_user(
     audit_detail = {k: v for k, v in updates.items() if k != "password"}
     if password:
         audit_detail["password"] = "changed"
-    record_audit(session, admin.username, "update", "user", user_id, str(audit_detail))
+    record_audit(
+        session, admin.username, "update", "user", user_id, format_detail(audit_detail)
+    )
     await session.commit()
     return user
