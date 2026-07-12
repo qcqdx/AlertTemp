@@ -77,6 +77,9 @@ async def test_quality_endpoint(client, session_factory):
     assert response.status_code == 200
     body = response.json()
     assert body["window"] == "24h"
+    # без партии контекст партии пуст (эхо только в batch-режиме)
+    assert body["batch_id"] is None
+    assert body["batch_label"] is None
     quality = body["sensors"][0]
 
     assert quality["sensor_id"] == sensor_id

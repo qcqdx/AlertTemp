@@ -141,6 +141,9 @@ async def test_quality_by_batch_window(client, session_factory):
         )
     ).json()
     assert quality["window"] == f"batch:{clean['id']}"
+    # снимок самоидентифицируется: типизированный batch_id + метка, без
+    # разбора строки window (находка стенда цикла K)
+    assert quality["batch_id"] == clean["id"]
     assert quality["batch_label"] == "Чистая"
     sensor = quality["sensors"][0]
     assert sensor["out_above_s"] == 0  # перегрев был ДО загрузки партии

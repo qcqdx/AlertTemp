@@ -78,7 +78,11 @@ class ControllerQuality(BaseModel):
     basis: str  # current | historical — семантика расчёта «вне диапазона»
     start: datetime
     end: datetime
-    batch_label: str | None = None  # заполнен в режиме партии
+    # эхо контекста партии: снимок quality (дашборд/выгрузка) должен
+    # самоидентифицироваться, не заставляя читателя парсить window
+    # (находка стенда цикла K, симметрично escalated_tier в /incidents)
+    batch_id: int | None = None
+    batch_label: str | None = None
     sensors: list[SensorQuality]
 
 
@@ -254,6 +258,7 @@ async def controller_quality(
         basis=basis,
         start=start,
         end=end,
+        batch_id=batch_id,
         batch_label=batch_label,
         sensors=items,
     )
