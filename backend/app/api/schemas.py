@@ -69,6 +69,45 @@ class ControllerOut(BaseModel):
     sensors: list[SensorOut] = []
 
 
+# ---------- batches ----------
+
+
+class BatchCreate(BaseModel):
+    """Партия препаратов: что и когда помещено в холодильник (этап B.1)."""
+
+    label: str = Field(min_length=1, max_length=200)
+    loaded_at: datetime
+    unloaded_at: datetime | None = None
+    notes: str | None = None
+
+    @model_validator(mode="after")
+    def check_period(self) -> "BatchCreate":
+        if self.unloaded_at is not None and self.unloaded_at <= self.loaded_at:
+            raise ValueError("unloaded_at must be after loaded_at")
+        return self
+
+
+class BatchUpdate(BaseModel):
+    label: str | None = Field(default=None, min_length=1, max_length=200)
+    loaded_at: datetime | None = None
+    # None в присланном JSON = «вернуть в холодильник» (снять дату выгрузки);
+    # непереданное поле не трогается (exclude_unset)
+    unloaded_at: datetime | None = None
+    notes: str | None = None
+
+
+class BatchOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    controller_id: int
+    label: str
+    loaded_at: datetime
+    unloaded_at: datetime | None
+    notes: str | None
+    created_at: datetime
+
+
 # ---------- discovery ----------
 
 

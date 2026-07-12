@@ -34,6 +34,10 @@ router = APIRouter(
 
 WINDOWS: dict[str, int] = {"24h": 24, "7d": 24 * 7, "30d": 24 * 30}
 KELVIN = 273.15
+# потолок произвольных периодов (партии, отчёты): защита БД от сканов
+# годовой глубины; период длиннее — по частям (триггер пересмотра — суточный
+# агрегат, ROADMAP §D)
+MAX_PERIOD_DAYS = 92
 
 
 def mean_kinetic_temperature(temps_c: list[float], delta_h_over_r: float) -> float | None:
@@ -70,10 +74,11 @@ class SensorQuality(BaseModel):
 
 class ControllerQuality(BaseModel):
     controller_id: int
-    window: str
+    window: str  # 24h/7d/30d либо batch:<id> — окно конкретной партии
     basis: str  # current | historical — семантика расчёта «вне диапазона»
     start: datetime
     end: datetime
+    batch_label: str | None = None  # заполнен в режиме партии
     sensors: list[SensorQuality]
 
 
@@ -145,9 +150,15 @@ async def controller_quality(
     controller_id: int,
     window: Literal["24h", "7d", "30d"] = Query(default="24h"),
     basis: Literal["current", "historical"] = Query(default="current"),
+    batch_id: int | None = Query(default=None),
     session: AsyncSession = Depends(get_session),
 ) -> ControllerQuality:
     """Качество хранения за окно.
+
+    batch_id — окно конкретной партии: [загрузка, выгрузка или сейчас];
+    MKT и бюджет стабильности отвечают на вопрос «что пережила ЭТА партия»,
+    а не «что было за последние сутки» (этап B.1). window при этом
+    игнорируется, в ответе window="batch:<id>".
 
     basis=current — «вне диапазона» по ТЕКУЩЕМУ активному профилю: интерактивный
     режим («как выглядит прошлое на нынешних требованиях»); смена порогов
@@ -161,13 +172,26 @@ async def controller_quality(
     Бюджет стабильности в обоих режимах берётся из текущего активного профиля:
     бюджет — свойство препаратов, находящихся в холодильнике сейчас.
     """
+    from app.api.routes.batches import resolve_batch_window
+
     controller = await session.get(Controller, controller_id)
     if controller is None:
         raise HTTPException(status_code=404, detail="Controller not found")
 
-    end = datetime.now(UTC)
-    start = end - timedelta(hours=WINDOWS[window])
-    window_minutes = WINDOWS[window] * 60
+    batch_label = None
+    if batch_id is not None:
+        batch, start, end = await resolve_batch_window(session, controller_id, batch_id)
+        if end - start > timedelta(days=MAX_PERIOD_DAYS):
+            raise HTTPException(
+                status_code=422,
+                detail=f"batch period exceeds {MAX_PERIOD_DAYS} days",
+            )
+        window = f"batch:{batch_id}"
+        batch_label = batch.label
+    else:
+        end = datetime.now(UTC)
+        start = end - timedelta(hours=WINDOWS[window])
+    window_minutes = max(int((end - start).total_seconds() // 60), 1)
     delta_h_over_r = get_settings().mkt_delta_h_over_r
 
     sensors = await session.execute(
@@ -230,5 +254,6 @@ async def controller_quality(
         basis=basis,
         start=start,
         end=end,
+        batch_label=batch_label,
         sensors=items,
     )

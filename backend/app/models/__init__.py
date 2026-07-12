@@ -8,6 +8,7 @@ from app.models.alerting import (
 )
 from app.models.audit import AuditLog, record_audit
 from app.models.base import Base
+from app.models.batches import Batch
 from app.models.devices import (
     SENSORS_PER_CONTROLLER,
     Controller,
@@ -25,6 +26,7 @@ __all__ = [
     "AuditLog",
     "record_audit",
     "Base",
+    "Batch",
     "Controller",
     "ControllerStatus",
     "DiscoveredTopic",

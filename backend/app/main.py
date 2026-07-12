@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.routes import (
     audit,
     auth_routes,
+    batches,
     controllers,
     discovery,
     health,
@@ -103,6 +104,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(audit.router)
     app.include_router(quality.router)
     app.include_router(reports.router)
+    app.include_router(batches.router)
 
     # собранный web-интерфейс (frontend/dist), если лежит рядом
     static_dir = Path(settings.static_dir)

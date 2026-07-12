@@ -21,7 +21,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import get_current_user, require_viewer
+from app.api.routes.batches import resolve_batch_window
 from app.api.routes.quality import (
+    MAX_PERIOD_DAYS,
     _minute_buckets,
     _profile_at,
     mean_kinetic_temperature,
@@ -41,7 +43,7 @@ router = APIRouter(
     prefix="/api/v1", tags=["reports"], dependencies=[Depends(require_viewer)]
 )
 
-MAX_REPORT_DAYS = 92
+MAX_REPORT_DAYS = MAX_PERIOD_DAYS
 # разрыв в данных длиннее этого — слепая зона, отражается в отчёте
 GAP_THRESHOLD_S = 300
 
@@ -116,6 +118,7 @@ class ControllerReport(BaseModel):
     generated_by: str
     basis: str
     metric_note: str
+    batch: str | None = None  # метка партии, если отчёт по её окну
     sensors: list[ReportSensor]
 
 
@@ -161,19 +164,44 @@ def _normalize_period(start: datetime, end: datetime | None) -> tuple[datetime, 
     return start, end
 
 
+async def _report_window(
+    session: AsyncSession,
+    controller_id: int,
+    start: datetime | None,
+    end: datetime | None,
+    batch_id: int | None,
+) -> tuple[datetime, datetime, str | None]:
+    """Период отчёта: явный [start, end] либо окно партии (batch_id).
+
+    Возвращает (start, end, метка партии или None)."""
+    if batch_id is not None:
+        batch, start, end = await resolve_batch_window(session, controller_id, batch_id)
+        start, end = _normalize_period(start, end)
+        return start, end, batch.label
+    if start is None:
+        raise HTTPException(status_code=422, detail="start or batch_id is required")
+    start, end = _normalize_period(start, end)
+    return start, end, None
+
+
 @router.get("/controllers/{controller_id}/report", response_model=ControllerReport)
 async def controller_report(
     controller_id: int,
-    start: datetime,
+    start: datetime | None = None,
     end: datetime | None = None,
+    batch_id: int | None = None,
     session: AsyncSession = Depends(get_session),
     user: User = Depends(get_current_user),
 ) -> ControllerReport:
     controller = await session.get(Controller, controller_id)
     if controller is None:
         raise HTTPException(status_code=404, detail="Controller not found")
-    start, end = _normalize_period(start, end)
-    return await _build_report(session, controller, start, end, user.full_name)
+    start, end, batch_label = await _report_window(
+        session, controller_id, start, end, batch_id
+    )
+    return await _build_report(
+        session, controller, start, end, user.full_name, batch_label
+    )
 
 
 @router.get("/incidents/{incident_id}/report", response_model=ControllerReport)
@@ -210,8 +238,9 @@ def _csv_response(rows: list[list], filename: str) -> Response:
 @router.get("/controllers/{controller_id}/report.csv")
 async def controller_report_csv(
     controller_id: int,
-    start: datetime,
+    start: datetime | None = None,
     end: datetime | None = None,
+    batch_id: int | None = None,
     session: AsyncSession = Depends(get_session),
     user: User = Depends(get_current_user),
 ) -> Response:
@@ -219,13 +248,22 @@ async def controller_report_csv(
     controller = await session.get(Controller, controller_id)
     if controller is None:
         raise HTTPException(status_code=404, detail="Controller not found")
-    start, end = _normalize_period(start, end)
-    report = await _build_report(session, controller, start, end, user.full_name)
+    start, end, batch_label = await _report_window(
+        session, controller_id, start, end, batch_id
+    )
+    report = await _build_report(
+        session, controller, start, end, user.full_name, batch_label
+    )
 
+    head: list = [
+        "Объект", report.controller_name, "Период",
+        report.period_start.isoformat(), report.period_end.isoformat(),
+        "Сформировал", report.generated_by, "basis", report.basis,
+    ]
+    if report.batch is not None:
+        head += ["Партия", report.batch]
     rows: list[list] = [
-        ["Объект", report.controller_name, "Период",
-         report.period_start.isoformat(), report.period_end.isoformat(),
-         "Сформировал", report.generated_by, "basis", report.basis],
+        head,
         [],
         ["Датчик", "Топик", "Измерений", "Покрытие", "Мин", "Средняя", "Макс",
          "MKT", "Выше нормы, с", "Ниже нормы, с", "Всего вне, с",
@@ -239,8 +277,9 @@ async def controller_report_csv(
             len(sensor.gaps), sum(g.duration_s for g in sensor.gaps),
             len(sensor.incidents),
         ])
+    suffix = f"-batch{batch_id}" if batch_id is not None else ""
     return _csv_response(
-        rows, f"coldwatch-report-{controller_id}-{start:%Y%m%d}-{end:%Y%m%d}.csv"
+        rows, f"coldwatch-report-{controller_id}-{start:%Y%m%d}-{end:%Y%m%d}{suffix}.csv"
     )
 
 
@@ -250,6 +289,7 @@ async def _build_report(
     start: datetime,
     end: datetime,
     generated_by: str,
+    batch_label: str | None = None,
 ) -> ControllerReport:
     delta_h_over_r = get_settings().mkt_delta_h_over_r
     window_minutes = max(int((end - start).total_seconds() // 60), 1)
@@ -364,5 +404,6 @@ async def _build_report(
         generated_by=generated_by,
         basis="historical",
         metric_note=METRIC_NOTE,
+        batch=batch_label,
         sensors=report_sensors,
     )

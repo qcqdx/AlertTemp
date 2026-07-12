@@ -12,6 +12,8 @@ const thresholds = ref(null) // активный профиль первого �
 const incidents = ref([])
 const quality = ref(null)
 const qualityWindow = ref('24h')
+const qualityBatch = ref(null) // выбранная партия: качество считается от загрузки
+const batches = ref([])
 const error = ref('')
 const range = ref('24h')
 let timer = null
@@ -59,9 +61,64 @@ async function refresh() {
 }
 
 async function loadQuality() {
-  quality.value = await api.get(
-    `/api/v1/controllers/${props.id}/quality?window=${qualityWindow.value}`
-  )
+  const param = qualityBatch.value
+    ? `batch_id=${qualityBatch.value.id}`
+    : `window=${qualityWindow.value}`
+  quality.value = await api.get(`/api/v1/controllers/${props.id}/quality?${param}`)
+}
+
+// ---------- партии ----------
+const batchForm = ref(null)
+const batchBusy = ref(false)
+
+async function loadBatches() {
+  batches.value = await api.get(`/api/v1/controllers/${props.id}/batches`)
+}
+
+function newBatchForm() {
+  // datetime-local без секунд, локальное время текущего момента
+  const now = new Date()
+  const pad = (n) => String(n).padStart(2, '0')
+  batchForm.value = {
+    label: '',
+    loaded_at: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`,
+    notes: '',
+  }
+}
+
+async function saveBatch() {
+  batchBusy.value = true
+  error.value = ''
+  try {
+    await api.post(`/api/v1/controllers/${props.id}/batches`, {
+      label: batchForm.value.label,
+      loaded_at: new Date(batchForm.value.loaded_at).toISOString(),
+      notes: batchForm.value.notes || null,
+    })
+    batchForm.value = null
+    await loadBatches()
+  } catch (e) {
+    error.value = e.message
+  } finally {
+    batchBusy.value = false
+  }
+}
+
+async function unloadBatch(batch) {
+  if (!confirm(`Отметить партию «${batch.label}» выгруженной?`)) return
+  await api.patch(`/api/v1/batches/${batch.id}`, { unloaded_at: new Date().toISOString() })
+  await loadBatches()
+}
+
+async function deleteBatch(batch) {
+  if (!confirm(`Удалить запись о партии «${batch.label}»? История температур не затрагивается.`)) return
+  await api.delete(`/api/v1/batches/${batch.id}`)
+  if (qualityBatch.value?.id === batch.id) qualityBatch.value = null
+  await loadBatches()
+}
+
+function showBatchQuality(batch) {
+  qualityBatch.value = batch
 }
 
 function budgetClass(q) {
@@ -83,7 +140,7 @@ async function loadAll() {
   error.value = ''
   try {
     await refresh()
-    await Promise.all([loadChart(), loadThresholds(), loadQuality()])
+    await Promise.all([loadChart(), loadThresholds(), loadQuality(), loadBatches()])
   } catch (e) {
     error.value = e.message
   }
@@ -151,7 +208,7 @@ onMounted(() => {
 })
 onUnmounted(() => clearInterval(timer))
 watch(range, loadChart)
-watch(qualityWindow, loadQuality)
+watch([qualityWindow, qualityBatch], loadQuality)
 </script>
 
 <template>
@@ -226,9 +283,13 @@ watch(qualityWindow, loadQuality)
     <h2>Качество хранения</h2>
     <div class="form-row">
       <button v-for="w in ['24h', '7d', '30d']" :key="w"
-              :class="{ primary: qualityWindow === w }" @click="qualityWindow = w">
+              :class="{ primary: !qualityBatch && qualityWindow === w }"
+              @click="qualityBatch = null; qualityWindow = w">
         {{ w }}
       </button>
+      <span v-if="qualityBatch" class="badge warn">
+        партия «{{ qualityBatch.label }}» с {{ fmt(qualityBatch.loaded_at) }}
+      </span>
     </div>
     <div class="card" style="padding: 0; overflow-x: auto" v-if="quality">
       <table>
@@ -269,6 +330,65 @@ watch(qualityWindow, loadQuality)
         (покрытие &lt;100%) не означает отсутствие нарушений.
       </p>
     </div>
+
+    <h2>
+      Партии препаратов
+      <button v-if="auth.isAdmin && !batchForm" style="margin-left: 0.6rem" @click="newBatchForm">
+        Добавить
+      </button>
+    </h2>
+    <div class="card" v-if="batchForm">
+      <div class="form-row">
+        <label>Партия</label>
+        <input v-model="batchForm.label" size="30" placeholder="Препарат, серия, накладная" />
+        <label>Загружена</label>
+        <input v-model="batchForm.loaded_at" type="datetime-local" />
+      </div>
+      <div class="form-row">
+        <label>Заметка</label>
+        <input v-model="batchForm.notes" size="40" placeholder="необязательно" />
+      </div>
+      <div class="form-row">
+        <button class="primary" :disabled="batchBusy || !batchForm.label" @click="saveBatch">
+          Сохранить
+        </button>
+        <button @click="batchForm = null">Отмена</button>
+      </div>
+    </div>
+    <div class="card" style="padding: 0; overflow-x: auto" v-if="batches.length">
+      <table>
+        <thead>
+          <tr><th>Партия</th><th>Загружена</th><th>Выгружена</th><th>Заметка</th><th></th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="batch in batches" :key="batch.id">
+            <td>{{ batch.label }}</td>
+            <td>{{ fmt(batch.loaded_at) }}</td>
+            <td>
+              <template v-if="batch.unloaded_at">{{ fmt(batch.unloaded_at) }}</template>
+              <span v-else class="badge ok">в холодильнике</span>
+            </td>
+            <td>{{ batch.notes ?? '' }}</td>
+            <td style="white-space: nowrap">
+              <button @click="showBatchQuality(batch)">Качество</button>
+              <router-link :to="`/controllers/${props.id}/report?batch=${batch.id}`">
+                Отчёт
+              </router-link>
+              <button v-if="auth.isAdmin && !batch.unloaded_at" @click="unloadBatch(batch)">
+                Выгружена
+              </button>
+              <button v-if="auth.isAdmin" @click="deleteBatch(batch)">✕</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="hint" style="padding: 0 0.6rem 0.6rem">
+        «Качество» считает MKT и бюджет стабильности от даты загрузки партии —
+        ответ на вопрос «что пережила эта партия», а не «что было за сутки».
+      </p>
+    </div>
+    <p v-else class="hint">Партии не отмечены. Отметка партий позволяет считать
+      MKT и бюджет стабильности от даты загрузки.</p>
 
     <h2>Инциденты</h2>
     <div class="card" style="padding: 0; overflow-x: auto">

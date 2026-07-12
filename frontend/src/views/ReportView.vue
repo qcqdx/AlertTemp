@@ -1,16 +1,22 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { api } from '../api.js'
 
-// Два режима одной формы:
-//  id         — температурный журнал холодильника за выбранный период;
-//  incidentId — отчёт по экскурсии: период задаёт сервер
-//               ([открытие − 1 ч, закрытие + 1 ч]).
+// Три режима одной формы:
+//  id            — температурный журнал холодильника за выбранный период;
+//  id + ?batch=N — журнал за окно партии (период задаёт сервер: загрузка → выгрузка);
+//  incidentId    — отчёт по экскурсии: период задаёт сервер
+//                  ([открытие − 1 ч, закрытие + 1 ч]).
 const props = defineProps({
   id: { type: String, default: '' },
   incidentId: { type: String, default: '' },
 })
+const route = useRoute()
+const batchId = computed(() => route.query.batch || '')
 const isIncident = computed(() => !!props.incidentId)
+// период задаёт сервер — селекторы периода не показываются
+const serverPeriod = computed(() => isIncident.value || !!batchId.value)
 
 const report = ref(null)
 const error = ref('')
@@ -29,19 +35,23 @@ function periodQuery() {
   return `start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`
 }
 
+function reportQuery() {
+  return batchId.value ? `batch_id=${batchId.value}` : periodQuery()
+}
+
 async function load() {
   error.value = ''
   try {
     report.value = isIncident.value
       ? await api.get(`/api/v1/incidents/${props.incidentId}/report`)
-      : await api.get(`/api/v1/controllers/${props.id}/report?${periodQuery()}`)
+      : await api.get(`/api/v1/controllers/${props.id}/report?${reportQuery()}`)
   } catch (e) {
     error.value = e.message
   }
 }
 
 const csvUrl = computed(() =>
-  isIncident.value ? null : `/api/v1/controllers/${props.id}/report.csv?${periodQuery()}`
+  isIncident.value ? null : `/api/v1/controllers/${props.id}/report.csv?${reportQuery()}`
 )
 
 function printPage() {
@@ -67,14 +77,14 @@ onMounted(load)
 <template>
   <div class="page report-page">
     <div class="form-row no-print">
-      <template v-if="!isIncident">
+      <template v-if="!serverPeriod">
         <label>Период с</label>
         <input v-model="startLocal" type="datetime-local" />
         <label>по</label>
         <input v-model="endLocal" type="datetime-local" />
         <button class="primary" @click="load">Сформировать</button>
-        <a :href="csvUrl">⬇ CSV</a>
       </template>
+      <a v-if="!isIncident" :href="csvUrl">⬇ CSV</a>
       <button @click="printPage">🖨 Печать</button>
       <router-link v-if="isIncident" to="/incidents">← к журналу инцидентов</router-link>
       <router-link v-else :to="`/controllers/${props.id}`">← к холодильнику</router-link>
@@ -87,6 +97,8 @@ onMounted(load)
         <tbody>
           <tr><td>Объект</td><td><b>{{ report.controller_name }}</b>
             <template v-if="report.location"> · {{ report.location }}</template></td></tr>
+          <tr v-if="report.batch"><td>Партия</td><td><b>{{ report.batch }}</b>
+            (период — от загрузки до выгрузки/момента формирования)</td></tr>
           <tr><td>Период</td><td>{{ fmt(report.period_start) }} — {{ fmt(report.period_end) }}</td></tr>
           <tr><td>Сформирован</td><td>{{ fmt(report.generated_at) }}, {{ report.generated_by }}</td></tr>
           <tr><td>Методика</td><td class="hint">{{ report.metric_note }}</td></tr>
