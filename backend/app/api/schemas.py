@@ -198,11 +198,14 @@ class RecipientCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     chat_id: str = Field(min_length=1, max_length=64)
     enabled: bool = True
+    # круг эскалации: 1 — дежурная смена, 2/3 — подключаются при неответе
+    tier: int = Field(default=1, ge=1, le=3)
 
 
 class RecipientUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     enabled: bool | None = None
+    tier: int | None = Field(default=None, ge=1, le=3)
 
 
 class RecipientOut(BaseModel):
@@ -212,3 +215,4 @@ class RecipientOut(BaseModel):
     name: str
     chat_id: str
     enabled: bool
+    tier: int

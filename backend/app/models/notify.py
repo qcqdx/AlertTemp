@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, String
+from sqlalchemy import Boolean, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -17,3 +17,6 @@ class NotificationRecipient(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     chat_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # круг эскалации: 1 — дежурная смена (получает всё сразу); 2, 3 —
+    # подключаются, если инцидент не подтверждён через delay, 2*delay...
+    tier: Mapped[int] = mapped_column(Integer, nullable=False, default=1)

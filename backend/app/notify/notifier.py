@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.bus import EventBus, IncidentEvent
 from app.core.config import Settings
 from app.models import Controller, Incident, IncidentStatus, IncidentType, Sensor
+from app.models.audit import record_audit
 from app.models.notify import NotificationRecipient
 
 logger = logging.getLogger(__name__)
@@ -211,6 +212,30 @@ def format_reminder(
     return "\n".join(lines)
 
 
+def format_escalation(
+    incident: Incident,
+    controller_name: str,
+    sensor_alias: str,
+    tz: ZoneInfo,
+    now: datetime,
+    tier: int,
+) -> str:
+    key = (str(incident.type), str(incident.severity))
+    emoji = _EMOJI.get(key, "🚨")
+    title = _TITLES.get(key, str(incident.type))
+    duration = format_duration(now - incident.opened_at)
+    opened_local = incident.opened_at.astimezone(tz).strftime("%d.%m.%Y %H:%M:%S")
+    lines = [
+        f"📣 <b>ЭСКАЛАЦИЯ (круг {tier})</b> {emoji} {title} — "
+        f"<b>{controller_name}, {sensor_alias}</b>",
+        f"Инцидент не подтверждён уже <b>{duration}</b> — дежурная смена не отреагировала.",
+    ]
+    if incident.peak_value is not None:
+        lines.append(f"Пик: <b>{incident.peak_value} °C</b>")
+    lines.append(f"<i>Начало: {opened_local}</i>")
+    return "\n".join(lines)
+
+
 class TelegramNotifier:
     def __init__(
         self,
@@ -227,6 +252,8 @@ class TelegramNotifier:
         self._queue: asyncio.Queue | None = None
         self._task: asyncio.Task | None = None
         self._reminder_task: asyncio.Task | None = None
+        self._updates_task: asyncio.Task | None = None
+        self._heartbeat_task: asyncio.Task | None = None
         self._started_at: datetime | None = None
         self._stopping = False
         self._tz = ZoneInfo(settings.display_timezone)
@@ -246,9 +273,20 @@ class TelegramNotifier:
             self._transport = await self._make_http_transport()
         self._queue = self._bus.subscribe()
         self._task = asyncio.create_task(self._consume_loop(), name="notifier")
-        if self._settings.notify_reminder_interval_s > 0:
+        if (
+            self._settings.notify_reminder_interval_s > 0
+            or self._settings.notify_escalation_delay_s > 0
+        ):
             self._reminder_task = asyncio.create_task(
                 self._reminder_loop(), name="notifier-reminders"
+            )
+        if self._settings.notify_telegram_ack_buttons and self._settings.telegram_bot_token:
+            self._updates_task = asyncio.create_task(
+                self._updates_loop(), name="notifier-updates"
+            )
+        if self._settings.notify_heartbeat_hour >= 0:
+            self._heartbeat_task = asyncio.create_task(
+                self._heartbeat_loop(), name="notifier-heartbeat"
             )
 
     async def stop(self) -> None:
@@ -256,7 +294,7 @@ class TelegramNotifier:
         if self._queue is not None:
             self._bus.unsubscribe(self._queue)
             self._queue = None
-        for task_attr in ("_task", "_reminder_task"):
+        for task_attr in ("_task", "_reminder_task", "_updates_task", "_heartbeat_task"):
             task = getattr(self, task_attr, None)
             if task is not None:
                 task.cancel()
@@ -274,6 +312,10 @@ class TelegramNotifier:
     async def _reminder_loop(self) -> None:
         while not self._stopping:
             await asyncio.sleep(self._settings.notify_reminder_check_s)
+            try:
+                await self.process_escalations()
+            except Exception:
+                logger.exception("Escalation pass failed")
             try:
                 await self.send_reminders()
             except Exception:
@@ -313,42 +355,115 @@ class TelegramNotifier:
             ]
             if not due:
                 return 0
-            recipients = await session.execute(
+            recipients_rows = await session.execute(
                 select(NotificationRecipient).where(NotificationRecipient.enabled.is_(True))
             )
-            chat_ids = [r.chat_id for r in recipients.scalars()]
-            if not chat_ids:
+            recipients = list(recipients_rows.scalars().all())
+            if not recipients:
                 return 0
 
-            # групповые сбои схлопываются в одну сводку на чат
-            if len(due) == 1:
-                incident, alias, controller_name = due[0]
-                text = format_reminder(incident, controller_name, alias, self._tz, now)
-            else:
-                text = format_reminder_digest(due, self._tz, now)
-
-            delivered = False
-            for chat_id in chat_ids:
-                try:
-                    await self._send_with_retry(
-                        {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+            # каждому получателю — только инциденты его круга и ниже;
+            # групповые сбои схлопываются в сводку на чат
+            delivered_incidents: set[int] = set()
+            for recipient in recipients:
+                items = [d for d in due if recipient.tier <= d[0].escalated_tier]
+                if not items:
+                    continue
+                payload = {"chat_id": recipient.chat_id, "parse_mode": "HTML"}
+                if len(items) == 1:
+                    incident, alias, controller_name = items[0]
+                    payload["text"] = format_reminder(
+                        incident, controller_name, alias, self._tz, now
                     )
+                    markup = self._ack_markup(incident.id)
+                    if markup is not None:
+                        payload["reply_markup"] = markup
+                else:
+                    payload["text"] = format_reminder_digest(items, self._tz, now)
+                try:
+                    await self._send_with_retry(payload)
                     self.stats.sent += 1
                     self.stats.consecutive_failures = 0
-                    delivered = True
+                    delivered_incidents.update(item[0].id for item in items)
                 except Exception as exc:
                     self.stats.failed += 1
                     self.stats.consecutive_failures += 1
                     self.stats.last_error = str(exc)[:500]
-                    logger.error("Reminder to chat %s failed: %s", chat_id, exc)
+                    logger.error("Reminder to chat %s failed: %s", recipient.chat_id, exc)
 
-            if not delivered:
+            if not delivered_incidents:
                 return 0
             for incident, _, _ in due:
-                incident.last_reminder_at = now
-                incident.reminder_count += 1
+                if incident.id in delivered_incidents:
+                    incident.last_reminder_at = now
+                    incident.reminder_count += 1
             await session.commit()
-        return len(due)
+        return len(delivered_incidents)
+
+    # ---------- эскалация кругами ----------
+
+    async def process_escalations(self, now: datetime | None = None) -> int:
+        """Инцидент не подтверждён через delay — подключается круг 2,
+        через 2*delay — круг 3 и т.д. (до максимального круга получателей).
+        Подтверждение останавливает эскалацию; закрытие — тоже."""
+        delay = self._settings.notify_escalation_delay_s
+        if delay <= 0:
+            return 0
+        now = now or datetime.now(UTC)
+        escalated = 0
+
+        async with self._session_factory() as session:
+            recipients_rows = await session.execute(
+                select(NotificationRecipient).where(NotificationRecipient.enabled.is_(True))
+            )
+            recipients = list(recipients_rows.scalars().all())
+            max_tier = max((r.tier for r in recipients), default=1)
+            if max_tier <= 1:
+                return 0
+
+            rows = await session.execute(
+                select(Incident, Sensor.alias, Controller.name)
+                .join(Sensor, Sensor.id == Incident.sensor_id)
+                .join(Controller, Controller.id == Incident.controller_id)
+                .where(Incident.status == IncidentStatus.OPEN)
+            )
+            for incident, alias, controller_name in rows.all():
+                age_s = (now - incident.opened_at).total_seconds()
+                target = min(1 + int(age_s // delay), max_tier)
+                if target <= incident.escalated_tier:
+                    continue
+                text = format_escalation(
+                    incident, controller_name, alias, self._tz, now, target
+                )
+                markup = self._ack_markup(incident.id)
+                delivered = False
+                for recipient in recipients:
+                    if not (incident.escalated_tier < recipient.tier <= target):
+                        continue
+                    payload = {
+                        "chat_id": recipient.chat_id,
+                        "text": text,
+                        "parse_mode": "HTML",
+                    }
+                    if markup is not None:
+                        payload["reply_markup"] = markup
+                    try:
+                        await self._send_with_retry(payload)
+                        self.stats.sent += 1
+                        self.stats.consecutive_failures = 0
+                        delivered = True
+                    except Exception as exc:
+                        self.stats.failed += 1
+                        self.stats.consecutive_failures += 1
+                        self.stats.last_error = str(exc)[:500]
+                        logger.error(
+                            "Escalation to chat %s failed: %s", recipient.chat_id, exc
+                        )
+                if delivered:
+                    incident.escalated_tier = target
+                    escalated += 1
+            await session.commit()
+        return escalated
 
     async def _make_http_transport(self) -> Transport:
         import aiohttp
@@ -416,7 +531,12 @@ class TelegramNotifier:
             return
         if not self._settings.telegram_bot_token and self._transport is None:
             return
-        recipients = await self._recipients()
+        # сводка уходит всем кругам, подключённым хотя бы к одному из событий
+        tiers = [
+            1 if e.kind == "opened" else await self._incident_tier(e.incident_id)
+            for e in events
+        ]
+        recipients = await self._recipients(max_tier=max(tiers))
         if not recipients:
             return
         text = format_event_digest(events, self._tz)
@@ -439,17 +559,36 @@ class TelegramNotifier:
                 self.stats.last_error = str(exc)[:500]
                 logger.error("Failed to notify chat %s: %s", recipient.chat_id, exc)
 
-    async def _recipients(self) -> list[NotificationRecipient]:
+    async def _recipients(self, max_tier: int | None = None) -> list[NotificationRecipient]:
         async with self._session_factory() as session:
-            rows = await session.execute(
-                select(NotificationRecipient).where(NotificationRecipient.enabled.is_(True))
-            )
+            query = select(NotificationRecipient).where(NotificationRecipient.enabled.is_(True))
+            if max_tier is not None:
+                query = query.where(NotificationRecipient.tier <= max_tier)
+            rows = await session.execute(query)
             return list(rows.scalars().all())
+
+    def _ack_markup(self, incident_id: int) -> dict | None:
+        """Inline-кнопка подтверждения прямо в сообщении."""
+        if not self._settings.notify_telegram_ack_buttons:
+            return None
+        return {
+            "inline_keyboard": [
+                [{"text": "✅ Подтвердить", "callback_data": f"ack:{incident_id}"}]
+            ]
+        }
+
+    async def _incident_tier(self, incident_id: int) -> int:
+        async with self._session_factory() as session:
+            incident = await session.get(Incident, incident_id)
+            return incident.escalated_tier if incident is not None else 1
 
     async def deliver(self, event: IncidentEvent) -> None:
         if not self._settings.telegram_bot_token and self._transport is None:
             return  # канал не настроен
-        recipients = await self._recipients()
+        # новые инциденты идут кругу 1; эскалированные/закрытые — всем
+        # кругам, которые уже были подключены
+        max_tier = 1 if event.kind == "opened" else await self._incident_tier(event.incident_id)
+        recipients = await self._recipients(max_tier=max_tier)
         if not recipients:
             return
         text = format_message(event, self._tz)
@@ -472,6 +611,10 @@ class TelegramNotifier:
             reply_to = self._thread_ids.pop(thread_key, None)
             if reply_to is not None:
                 payload["reply_to_message_id"] = reply_to
+        else:
+            markup = self._ack_markup(event.incident_id)
+            if markup is not None:
+                payload["reply_markup"] = markup
 
         try:
             data = await self._send_with_retry(payload)
@@ -507,6 +650,167 @@ class TelegramNotifier:
             "delivery failed after retries: "
             f"{type(last_error).__name__}: {last_error or '<no message>'}"
         )
+
+    # ---------- подтверждение из Telegram (ack-кнопка) ----------
+
+    async def _updates_loop(self) -> None:
+        """Long-poll getUpdates через тот же транспорт (работает и за SOCKS5)."""
+        offset: int | None = None
+        while not self._stopping:
+            try:
+                payload: dict = {"timeout": 20, "allowed_updates": ["callback_query"]}
+                if offset is not None:
+                    payload["offset"] = offset
+                data = await self._transport("getUpdates", payload)
+                for update in data.get("result", []):
+                    offset = update["update_id"] + 1
+                    callback = update.get("callback_query")
+                    if callback:
+                        await self.handle_callback(callback)
+            except Exception as exc:
+                logger.warning("getUpdates failed: %s", exc)
+                await asyncio.sleep(5)
+
+    async def handle_callback(self, callback: dict) -> None:
+        """Нажатие «Подтвердить» в чате: ack инцидента без входа в UI."""
+        callback_id = callback.get("id")
+        data = callback.get("data", "")
+        chat_id = str(callback.get("message", {}).get("chat", {}).get("id", ""))
+        from_user = callback.get("from", {})
+        who = (
+            f"{from_user.get('first_name', '')} {from_user.get('last_name', '')}".strip()
+            or from_user.get("username")
+            or str(from_user.get("id", "?"))
+        )
+
+        async def answer(text: str) -> None:
+            if callback_id is None:
+                return
+            try:
+                await self._transport(
+                    "answerCallbackQuery", {"callback_query_id": callback_id, "text": text}
+                )
+            except Exception as exc:
+                logger.warning("answerCallbackQuery failed: %s", exc)
+
+        if not data.startswith("ack:"):
+            return await answer("Неизвестная команда")
+
+        # подтверждать могут только зарегистрированные включённые чаты
+        recipients = await self._recipients()
+        if chat_id not in {r.chat_id for r in recipients}:
+            return await answer("Этот чат не зарегистрирован в ColdWatch")
+
+        incident_id = int(data.removeprefix("ack:"))
+        async with self._session_factory() as session:
+            incident = await session.get(Incident, incident_id)
+            if incident is None:
+                return await answer("Инцидент не найден")
+            if incident.status == IncidentStatus.RESOLVED:
+                return await answer("Инцидент уже закрыт")
+            if incident.acknowledged_at is not None:
+                return await answer(f"Уже подтверждён: {incident.acknowledged_by}")
+
+            incident.status = IncidentStatus.ACKNOWLEDGED
+            incident.acknowledged_by = f"{who} (Telegram)"
+            incident.acknowledged_at = datetime.now(UTC)
+            record_audit(
+                session,
+                f"tg:{from_user.get('username') or from_user.get('id', '?')}",
+                "ack",
+                "incident",
+                incident_id,
+            )
+            await session.commit()
+        await answer("Подтверждено ✅ Напоминания остановлены.")
+
+    # ---------- ежедневный «система жива»-дайджест ----------
+
+    async def _heartbeat_loop(self) -> None:
+        while not self._stopping:
+            hour = self._settings.notify_heartbeat_hour
+            if hour < 0:
+                return
+            now_local = datetime.now(self._tz)
+            fire_at = now_local.replace(hour=hour, minute=0, second=0, microsecond=0)
+            if fire_at <= now_local:
+                fire_at += timedelta(days=1)
+            await asyncio.sleep((fire_at - now_local).total_seconds())
+            if self._stopping:
+                return
+            try:
+                await self.send_heartbeat()
+            except Exception:
+                logger.exception("Heartbeat digest failed")
+
+    async def compose_heartbeat(self, now: datetime | None = None) -> str:
+        """Система, которая молчит, неотличима от системы, где всё хорошо, —
+        ежедневный дайджест подтверждает и жизнь канала, и состояние парка."""
+        from app.models import Measurement, Sensor, SensorStatus
+
+        now = now or datetime.now(UTC)
+        day_ago = now - timedelta(hours=24)
+        async with self._session_factory() as session:
+            sensors_rows = await session.execute(
+                select(Sensor).where(Sensor.status == SensorStatus.ACTIVE)
+            )
+            sensors = list(sensors_rows.scalars().all())
+            online = 0
+            for sensor in sensors:
+                last = await session.execute(
+                    select(Measurement.time)
+                    .where(Measurement.sensor_id == sensor.id)
+                    .order_by(Measurement.time.desc())
+                    .limit(1)
+                )
+                seen = last.scalar()
+                if seen is not None and (now - seen).total_seconds() < sensor.heartbeat_timeout_s:
+                    online += 1
+
+            open_rows = await session.execute(
+                select(Incident).where(Incident.status != IncidentStatus.RESOLVED)
+            )
+            open_incidents = list(open_rows.scalars().all())
+            day_rows = await session.execute(
+                select(Incident).where(Incident.opened_at >= day_ago)
+            )
+            day_incidents = list(day_rows.scalars().all())
+
+        lines = [f"💙 <b>ColdWatch жив</b> — {now.astimezone(self._tz).strftime('%d.%m.%Y %H:%M')}"]
+        offline = len(sensors) - online
+        sensor_line = f"Датчики: <b>{online}/{len(sensors)} online</b>"
+        if offline:
+            sensor_line += f" ⚠️ {offline} молчит"
+        lines.append(sensor_line)
+        lines.append(f"Инцидентов за сутки: <b>{len(day_incidents)}</b>")
+        if open_incidents:
+            unacked = sum(1 for i in open_incidents if i.status == IncidentStatus.OPEN)
+            lines.append(
+                f"⚠️ Сейчас открыто: <b>{len(open_incidents)}</b>"
+                + (f", из них НЕ подтверждено: <b>{unacked}</b>" if unacked else "")
+            )
+        else:
+            lines.append("Открытых инцидентов нет 🍀")
+        if self.stats.failed:
+            lines.append(
+                f"Доставка за период работы: {self.stats.sent} ок / {self.stats.failed} ошибок"
+            )
+        return "\n".join(lines)
+
+    async def send_heartbeat(self, now: datetime | None = None) -> None:
+        text = await self.compose_heartbeat(now)
+        for recipient in await self._recipients(max_tier=1):
+            try:
+                await self._send_with_retry(
+                    {"chat_id": recipient.chat_id, "text": text, "parse_mode": "HTML"}
+                )
+                self.stats.sent += 1
+                self.stats.consecutive_failures = 0
+            except Exception as exc:
+                self.stats.failed += 1
+                self.stats.consecutive_failures += 1
+                self.stats.last_error = str(exc)[:500]
+                logger.error("Heartbeat to chat %s failed: %s", recipient.chat_id, exc)
 
     async def send_test(self, text: str = "ColdWatch: тестовое оповещение ✅") -> dict:
         """Кнопка «отправить тестовое» в настройках."""

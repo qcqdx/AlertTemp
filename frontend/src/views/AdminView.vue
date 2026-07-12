@@ -108,12 +108,15 @@ function archiveController(controller) {
 }
 
 // ---------- получатели ----------
-const newRecipient = ref({ name: '', chat_id: '' })
+const newRecipient = ref({ name: '', chat_id: '', tier: 1 })
 
 function addRecipient() {
   return run(async () => {
-    await api.post('/api/v1/notify/recipients', { ...newRecipient.value })
-    newRecipient.value = { name: '', chat_id: '' }
+    await api.post('/api/v1/notify/recipients', {
+      ...newRecipient.value,
+      tier: Number(newRecipient.value.tier),
+    })
+    newRecipient.value = { name: '', chat_id: '', tier: 1 }
   })
 }
 
@@ -257,6 +260,11 @@ onUnmounted(() => clearInterval(timer))
     <div class="form-row">
       <input v-model="newRecipient.name" placeholder="Имя (Дежурная смена)" size="26" />
       <input v-model="newRecipient.chat_id" placeholder="chat_id" size="16" />
+      <select v-model="newRecipient.tier">
+        <option :value="1">Круг 1 — дежурные</option>
+        <option :value="2">Круг 2 — эскалация</option>
+        <option :value="3">Круг 3 — руководство</option>
+      </select>
       <button class="primary" :disabled="!newRecipient.name || !newRecipient.chat_id" @click="addRecipient">
         Добавить
       </button>
@@ -268,6 +276,14 @@ onUnmounted(() => clearInterval(timer))
           <tr v-for="recipient in recipients" :key="recipient.id">
             <td>{{ recipient.name }}</td>
             <td><code>{{ recipient.chat_id }}</code></td>
+            <td>
+              <select :value="recipient.tier"
+                      @change="run(() => api.patch(`/api/v1/notify/recipients/${recipient.id}`, { tier: Number($event.target.value) }))">
+                <option :value="1">Круг 1</option>
+                <option :value="2">Круг 2</option>
+                <option :value="3">Круг 3</option>
+              </select>
+            </td>
             <td>
               <span class="badge" :class="recipient.enabled ? 'ok' : 'muted'">
                 {{ recipient.enabled ? 'включён' : 'выключен' }}

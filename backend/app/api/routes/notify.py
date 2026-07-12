@@ -37,7 +37,9 @@ async def add_recipient(
     )
     if duplicate.first() is not None:
         raise HTTPException(status_code=409, detail="chat_id already registered")
-    recipient = NotificationRecipient(name=body.name, chat_id=body.chat_id, enabled=body.enabled)
+    recipient = NotificationRecipient(
+        name=body.name, chat_id=body.chat_id, enabled=body.enabled, tier=body.tier
+    )
     session.add(recipient)
     await session.flush()
     record_audit(session, user.username, "create", "recipient", recipient.id, body.name)

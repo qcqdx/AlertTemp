@@ -119,6 +119,8 @@ class Incident(Base):
     # повторяется; подтверждение (ack) останавливает напоминания
     reminder_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_reminder_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    # максимальный круг получателей, уже оповещённый об инциденте
+    escalated_tier: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
 class SensorRuntimeState(Base):
