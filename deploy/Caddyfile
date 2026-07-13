@@ -1,0 +1,19 @@
+# Reverse-proxy с TLS перед ColdWatch (этап C).
+#
+# COLDWATCH_PUBLIC_HOST задаётся в .env:
+#   - реальное доменное имя -> Caddy сам получит сертификат Let's Encrypt;
+#   - при первом запуске в закрытой техсети можно указать хост:порт или
+#     воспользоваться внутренним CA (см. tls-директиву ниже).
+#
+# WebSocket (/api/v1/ws) проксируется прозрачно: reverse_proxy передаёт
+# Upgrade/Connection-заголовки автоматически.
+
+{$COLDWATCH_PUBLIC_HOST} {
+	encode zstd gzip
+
+	# Внутренняя техсеть без публичного DNS: раскомментируйте, чтобы Caddy
+	# выпустил самоподписанный сертификат вместо обращения к Let's Encrypt.
+	# tls internal
+
+	reverse_proxy app:8000
+}

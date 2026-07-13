@@ -31,7 +31,7 @@ from app.models import (
     Sensor,
 )
 from app.models.audit import record_audit
-from app.models.notify import NotificationRecipient
+from app.models.notify import NotificationRecipient, NotifierState
 
 logger = logging.getLogger(__name__)
 
@@ -73,9 +73,13 @@ def normalize_proxy_url(url: str) -> tuple[str, bool]:
 
 @dataclass(slots=True)
 class NotifierStats:
-    """Счётчики in-memory: рестарт обнуляет consecutive_failures, т.е.
-    после рестарта статус канала ok до первой фактической неудачи —
-    известное поведение (зафиксировано отчётом стенда фазы 3.5)."""
+    """Счётчики канала оповещений.
+
+    sent/failed — за текущий сеанс работы (рестарт обнуляет, это счётчики
+    «с момента старта»). consecutive_failures и last_error персистятся в
+    БД (`notifier_state`) и восстанавливаются при старте: серия отказов
+    канала переживает рестарт, иначе перезапуск маскировал бы деградацию
+    (этап B.5)."""
 
     sent: int = 0
     failed: int = 0
@@ -276,6 +280,8 @@ class TelegramNotifier:
         # возобновляются не раньше, чем через полный интервал — иначе
         # N старых неподтверждённых дают N немедленных сообщений
         self._started_at = datetime.now(UTC)
+        # признак деградации канала переживает рестарт (B.5)
+        await self._load_health()
         if self._transport is None:
             self._transport = await self._make_http_transport()
         self._queue = self._bus.subscribe()
@@ -313,6 +319,48 @@ class TelegramNotifier:
         if self._http is not None:
             await self._http.close()
             self._http = None
+
+    # ---------- учёт доставок (B.5: деградация переживает рестарт) ----------
+
+    async def _load_health(self) -> None:
+        """Восстановить счётчик подряд-неудач из БД при старте."""
+        try:
+            async with self._session_factory() as session:
+                state = await session.get(NotifierState, 1)
+                if state is not None:
+                    self.stats.consecutive_failures = state.consecutive_failures
+                    self.stats.last_error = state.last_error
+        except Exception as exc:  # БД недоступна — не мешаем старту канала
+            logger.warning("Failed to load notifier health: %s", exc)
+
+    async def _persist_health(self) -> None:
+        """Сохранить признак деградации. Персистентность — вспомогательная:
+        её сбой не должен ломать доставку (сообщение уже отправлено)."""
+        try:
+            async with self._session_factory() as session:
+                state = await session.get(NotifierState, 1)
+                if state is None:
+                    state = NotifierState(id=1)
+                    session.add(state)
+                state.consecutive_failures = self.stats.consecutive_failures
+                state.last_error = self.stats.last_error
+                await session.commit()
+        except Exception as exc:
+            logger.warning("Failed to persist notifier health: %s", exc)
+
+    async def _record_success(self) -> None:
+        self.stats.sent += 1
+        # запись в БД только на переходе «деградация → норма», а не на
+        # каждой рутинной доставке
+        if self.stats.consecutive_failures:
+            self.stats.consecutive_failures = 0
+            await self._persist_health()
+
+    async def _record_failure(self, exc: Exception) -> None:
+        self.stats.failed += 1
+        self.stats.consecutive_failures += 1
+        self.stats.last_error = str(exc)[:500]
+        await self._persist_health()
 
     # ---------- напоминания ----------
 
@@ -397,13 +445,10 @@ class TelegramNotifier:
                         payload["reply_markup"] = digest_markup
                 try:
                     await self._send_with_retry(payload)
-                    self.stats.sent += 1
-                    self.stats.consecutive_failures = 0
+                    await self._record_success()
                     delivered_incidents.update(item[0].id for item in items)
                 except Exception as exc:
-                    self.stats.failed += 1
-                    self.stats.consecutive_failures += 1
-                    self.stats.last_error = str(exc)[:500]
+                    await self._record_failure(exc)
                     logger.error("Reminder to chat %s failed: %s", recipient.chat_id, exc)
 
             if not delivered_incidents:
@@ -464,13 +509,10 @@ class TelegramNotifier:
                         payload["reply_markup"] = markup
                     try:
                         await self._send_with_retry(payload)
-                        self.stats.sent += 1
-                        self.stats.consecutive_failures = 0
+                        await self._record_success()
                         delivered = True
                     except Exception as exc:
-                        self.stats.failed += 1
-                        self.stats.consecutive_failures += 1
-                        self.stats.last_error = str(exc)[:500]
+                        await self._record_failure(exc)
                         logger.error(
                             "Escalation to chat %s failed: %s", recipient.chat_id, exc
                         )
@@ -576,12 +618,9 @@ class TelegramNotifier:
                 payload["reply_markup"] = markup
             try:
                 await self._send_with_retry(payload)
-                self.stats.sent += 1
-                self.stats.consecutive_failures = 0
+                await self._record_success()
             except Exception as exc:
-                self.stats.failed += 1
-                self.stats.consecutive_failures += 1
-                self.stats.last_error = str(exc)[:500]
+                await self._record_failure(exc)
                 logger.error("Failed to notify chat %s: %s", recipient.chat_id, exc)
 
     async def _recipients(self, max_tier: int | None = None) -> list[NotificationRecipient]:
@@ -651,13 +690,10 @@ class TelegramNotifier:
         for recipient in recipients:
             try:
                 await self._deliver_one(event, recipient.chat_id, text)
-                self.stats.sent += 1
-                self.stats.consecutive_failures = 0
+                await self._record_success()
             except Exception as exc:
                 # один недоступный получатель не блокирует остальных
-                self.stats.failed += 1
-                self.stats.consecutive_failures += 1
-                self.stats.last_error = str(exc)[:500]
+                await self._record_failure(exc)
                 logger.error("Failed to notify chat %s: %s", recipient.chat_id, exc)
 
     async def _deliver_one(self, event: IncidentEvent, chat_id: str, text: str) -> None:
@@ -879,12 +915,9 @@ class TelegramNotifier:
                 await self._send_with_retry(
                     {"chat_id": recipient.chat_id, "text": text, "parse_mode": "HTML"}
                 )
-                self.stats.sent += 1
-                self.stats.consecutive_failures = 0
+                await self._record_success()
             except Exception as exc:
-                self.stats.failed += 1
-                self.stats.consecutive_failures += 1
-                self.stats.last_error = str(exc)[:500]
+                await self._record_failure(exc)
                 logger.error("Heartbeat to chat %s failed: %s", recipient.chat_id, exc)
 
     async def send_test(self, text: str = "ColdWatch: тестовое оповещение ✅") -> dict:

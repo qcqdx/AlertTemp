@@ -36,6 +36,32 @@ curl http://localhost:8000/healthz
 
 API-документация: http://localhost:8000/docs
 
+По умолчанию порт 8000 слушается только на `127.0.0.1` — наружу приложение
+выставляется через TLS-терминатор, а не напрямую.
+
+### TLS (reverse-proxy)
+
+Профиль `tls` поднимает Caddy перед приложением (порты 80/443, автоматический
+сертификат Let's Encrypt для публичного домена; для закрытой техсети —
+`tls internal` в `deploy/Caddyfile`). В `.env`:
+
+```bash
+COLDWATCH_PUBLIC_HOST=coldwatch.example.org
+COLDWATCH_SESSION_COOKIE_SECURE=true   # cookie сессии только по HTTPS
+```
+
+```bash
+docker compose --profile tls up -d      # app + db + mqtt + caddy
+```
+
+WebSocket (`/api/v1/ws`, живое обновление дашборда) проксируется прозрачно.
+
+### Первый вход и смена пароля
+
+Логин `admin`, пароль из `COLDWATCH_ADMIN_PASSWORD` (или сгенерированный в лог
+при первом старте). После входа сразу смените его: «Администрирование» →
+«Сменить пароль» — смена отзывает все прежние сессии.
+
 ## Разработка
 
 ```bash

@@ -47,7 +47,7 @@ services:
       COLDWATCH_MQTT_HOST: ${COLDWATCH_MQTT_HOST:-mqtt}
     ports:
       # API доступен только с хоста: наружу — через reverse-proxy с TLS
-      # (аутентификация в приложении появляется в фазе 2)
+      # (профиль tls ниже). Прямой публичный проброс 8000 не делать.
       - "127.0.0.1:8000:8000"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')\""]
@@ -55,6 +55,29 @@ services:
       timeout: 5s
       retries: 3
 
+  # TLS-терминатор (этап C). Включается профилем:
+  #   docker compose --profile tls up -d
+  # Требует в .env: COLDWATCH_PUBLIC_HOST (домен или хост) и
+  # COLDWATCH_SESSION_COOKIE_SECURE=true (иначе cookie сессии уйдёт и по
+  # HTTP — при работе за TLS это лишний риск).
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    profiles: ["tls"]
+    depends_on:
+      - app
+    environment:
+      COLDWATCH_PUBLIC_HOST: ${COLDWATCH_PUBLIC_HOST:?set in .env for tls profile}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
 volumes:
   db-data:
   mqtt-data:
+  caddy-data:
+  caddy-config:

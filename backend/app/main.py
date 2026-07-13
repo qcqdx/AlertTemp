@@ -21,6 +21,7 @@ from app.api.routes import (
     sensors,
     thresholds,
     users,
+    ws,
 )
 from app.core.bootstrap import ensure_admin
 from app.core.bus import bus
@@ -90,6 +91,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await dispose_engine()
 
     app = FastAPI(title="ColdWatch", version="0.1.0", lifespan=lifespan)
+    # шина доступна маршрутам (WebSocket-раздача) и тестам без lifespan
+    app.state.bus = bus
     app.include_router(health.router)
     app.include_router(auth_routes.router)
     app.include_router(users.router)
@@ -105,6 +108,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(quality.router)
     app.include_router(reports.router)
     app.include_router(batches.router)
+    app.include_router(ws.router)
 
     # собранный web-интерфейс (frontend/dist), если лежит рядом
     static_dir = Path(settings.static_dir)

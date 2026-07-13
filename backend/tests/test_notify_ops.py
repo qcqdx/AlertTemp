@@ -77,6 +77,83 @@ def notifier_kit(engine, session_factory, settings):
     return notifier, transport
 
 
+# ---------- B.5: деградация канала переживает рестарт ----------
+
+
+class FailingTransport:
+    """Транспорт, всегда падающий на sendMessage — имитация мёртвого канала."""
+
+    async def __call__(self, method: str, payload: dict) -> dict:
+        raise ConnectionError("proxy down")
+
+
+async def test_consecutive_failures_persist_across_restart(
+    engine, session_factory, settings
+):
+    """Находка B.5: серия отказов канала сохраняется в БД и восстанавливается
+    новым экземпляром — рестарт больше не маскирует деградацию."""
+    from app.models import NotifierState
+
+    settings.notify_retry_attempts = 1
+    settings.notify_retry_delay_s = 0.001
+    await add_recipient(session_factory, "111")
+
+    notifier = TelegramNotifier(
+        session_factory, settings, EventBus(), transport=FailingTransport()
+    )
+    # три неудачных доставки подряд
+    for i in range(3):
+        await notifier.deliver(make_event(incident_id=i))
+    assert notifier.stats.consecutive_failures == 3
+
+    async with session_factory() as session:
+        state = await session.get(NotifierState, 1)
+    assert state.consecutive_failures == 3
+    assert "proxy down" in state.last_error
+
+    # «рестарт»: свежий экземпляр восстанавливает счётчик через start()
+    restarted = TelegramNotifier(
+        session_factory, settings, EventBus(), transport=FailingTransport()
+    )
+    await restarted.start()
+    try:
+        assert restarted.stats.consecutive_failures == 3
+        assert "proxy down" in restarted.stats.last_error
+    finally:
+        await restarted.stop()
+
+
+async def test_success_resets_and_persists_zero(engine, session_factory, settings):
+    """Успешная доставка после серии отказов сбрасывает счётчик и пишет 0
+    в БД (переход деградация→норма переживает следующий рестарт)."""
+    from app.models import NotifierState
+
+    settings.notify_retry_attempts = 1
+    settings.notify_retry_delay_s = 0.001
+    await add_recipient(session_factory, "111")
+
+    failing = TelegramNotifier(
+        session_factory, settings, EventBus(), transport=FailingTransport()
+    )
+    await failing.deliver(make_event(incident_id=1))
+    assert failing.stats.consecutive_failures == 1
+
+    # тот же процесс, но канал ожил: MethodStubTransport доставляет успешно
+    healthy = TelegramNotifier(
+        session_factory, settings, EventBus(), transport=MethodStubTransport()
+    )
+    await healthy.start()
+    try:
+        await healthy.deliver(make_event(incident_id=2))
+        assert healthy.stats.consecutive_failures == 0
+    finally:
+        await healthy.stop()
+
+    async with session_factory() as session:
+        state = await session.get(NotifierState, 1)
+    assert state.consecutive_failures == 0
+
+
 # ---------- ack-кнопка ----------
 
 

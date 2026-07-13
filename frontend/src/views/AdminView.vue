@@ -140,6 +140,19 @@ function addUser() {
   })
 }
 
+// ---------- смена собственного пароля ----------
+// Обязательный шаг развёртывания: сменить сгенерированный/дефолтный пароль
+// admin после первого входа (смена отзывает все прежние сессии на сервере).
+const pwd = ref({ current_password: '', new_password: '' })
+
+function changePassword() {
+  return run(async () => {
+    await api.post('/api/v1/auth/password', { ...pwd.value })
+    pwd.value = { current_password: '', new_password: '' }
+    notice.value = 'Пароль изменён; прежние сессии отозваны.'
+  })
+}
+
 function fmt(ts) {
   return ts ? new Date(ts).toLocaleString('ru-RU') : '—'
 }
@@ -358,6 +371,22 @@ onUnmounted(() => clearInterval(timer))
           </tr>
         </tbody>
       </table>
+    </div>
+
+    <h2>Сменить пароль</h2>
+    <p class="hint">
+      После первого входа обязательно смените сгенерированный пароль admin.
+      Смена отзывает все прежние сессии этого пользователя.
+    </p>
+    <div class="form-row">
+      <input v-model="pwd.current_password" type="password" placeholder="Текущий пароль" size="18" />
+      <input v-model="pwd.new_password" type="password" placeholder="Новый пароль (мин. 8)" size="18" />
+      <button
+        class="primary"
+        :disabled="!pwd.current_password || pwd.new_password.length < 8"
+        @click="changePassword">
+        Сменить
+      </button>
     </div>
   </div>
 </template>

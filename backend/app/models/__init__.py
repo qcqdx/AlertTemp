@@ -18,7 +18,7 @@ from app.models.devices import (
 )
 from app.models.discovery import DiscoveredTopic, DiscoveredTopicStatus
 from app.models.measurement import Measurement
-from app.models.notify import IncidentMessage, NotificationRecipient
+from app.models.notify import IncidentMessage, NotificationRecipient, NotifierState
 from app.models.users import User, UserRole, UserSession
 
 __all__ = [
@@ -38,6 +38,7 @@ __all__ = [
     "IncidentType",
     "Measurement",
     "NotificationRecipient",
+    "NotifierState",
     "Sensor",
     "SensorRuntimeState",
     "SensorStatus",
